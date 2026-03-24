@@ -2,28 +2,45 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  ImageBackground,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   SafeAreaView,
+  ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from 'react-native';
 import { Link } from 'expo-router';
 
+import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
-import { useAppTheme } from '@/src/theme/ThemeProvider';
+import {
+  signInWithSupabaseOAuth,
+  useHandleIncomingOAuthUrl,
+} from '@/src/auth/socialAuth';
+
+const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function RegisterScreen() {
-  const { colors } = useAppTheme();
   const { signUp } = useAuth();
+  useHandleIncomingOAuthUrl();
+
+  const { height } = useWindowDimensions();
+
+  const isSmallDevice = height < 760;
+  const artworkHeight = isSmallDevice ? 260 : 305;
+  const artworkTop = isSmallDevice ? 2 : 8;
+  const contentTopPadding = isSmallDevice ? 250 : 300;
 
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<'email' | 'google' | 'apple' | null>(null);
 
   const onRegister = async () => {
     if (!fullName.trim() || !email.trim() || !password.trim()) {
@@ -37,167 +54,308 @@ export default function RegisterScreen() {
     }
 
     try {
-      setLoading(true);
+      setBusy('email');
       await signUp({ fullName, email, password });
     } catch (error: any) {
       Alert.alert('Registrierung fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
     } finally {
-      setLoading(false);
+      setBusy(null);
+    }
+  };
+
+  const onGoogle = async () => {
+    try {
+      setBusy('google');
+      await signInWithSupabaseOAuth('google');
+    } catch (error: any) {
+      Alert.alert('Google Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onApple = async () => {
+    try {
+      setBusy('apple');
+      await signInWithSupabaseOAuth('apple');
+    } catch (error: any) {
+      Alert.alert('Apple Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
+    } finally {
+      setBusy(null);
     }
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={styles.container}>
-          <Text style={[styles.title, { color: colors.text }]}>Konto erstellen</Text>
-          <Text style={[styles.subtitle, { color: colors.textMuted }]}>
-            Erstelle dein Profil, damit Kalendulu dich persönlich begrüßen und deine Daten speichern kann.
-          </Text>
+    <View style={styles.root}>
+      <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
 
-          <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.label, { color: colors.text }]}>Name</Text>
-            <TextInput
-              value={fullName}
-              onChangeText={setFullName}
-              placeholder="Dein Name"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="words"
-              style={[
-                styles.input,
-                {
-                  color: colors.text,
-                  borderColor: colors.border,
-                  backgroundColor: colors.backgroundSecondary,
-                },
-              ]}
-            />
+      <ImageBackground
+        source={backgroundAsset}
+        resizeMode="cover"
+        style={StyleSheet.absoluteFill}
+      />
 
-            <Text style={[styles.label, { color: colors.text }]}>E-Mail</Text>
-            <TextInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="name@email.com"
-              placeholderTextColor={colors.textMuted}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
+      <SafeAreaView style={styles.safe}>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <View style={styles.flex}>
+            <View
+              pointerEvents="none"
               style={[
-                styles.input,
+                styles.fixedArtworkLayer,
                 {
-                  color: colors.text,
-                  borderColor: colors.border,
-                  backgroundColor: colors.backgroundSecondary,
-                },
-              ]}
-            />
-
-            <Text style={[styles.label, { color: colors.text }]}>Passwort</Text>
-            <TextInput
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Mindestens 6 Zeichen"
-              placeholderTextColor={colors.textMuted}
-              secureTextEntry
-              style={[
-                styles.input,
-                {
-                  color: colors.text,
-                  borderColor: colors.border,
-                  backgroundColor: colors.backgroundSecondary,
-                },
-              ]}
-            />
-
-            <Pressable
-              onPress={onRegister}
-              disabled={loading}
-              style={[
-                styles.button,
-                {
-                  backgroundColor: colors.primary,
-                  opacity: loading ? 0.7 : 1,
+                  top: artworkTop,
+                  height: artworkHeight,
                 },
               ]}
             >
-              {loading ? (
-                <ActivityIndicator color={colors.primaryText} />
-              ) : (
-                <Text style={[styles.buttonText, { color: colors.primaryText }]}>Registrieren</Text>
-              )}
-            </Pressable>
+              <AuthArtwork height={artworkHeight} compact={isSmallDevice} />
+            </View>
 
-            <Link href="/login" asChild>
-              <Pressable style={styles.linkWrap}>
-                <Text style={[styles.linkText, { color: colors.primary }]}>
-                  Bereits ein Konto? Anmelden
-                </Text>
-              </Pressable>
-            </Link>
+            <ScrollView
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[
+                styles.scrollContent,
+                { paddingTop: contentTopPadding, paddingBottom: 20 },
+              ]}
+            >
+              <View style={styles.cardWrap}>
+                <View style={styles.card}>
+                  <Text style={styles.title}>Konto erstellen</Text>
+                  <Text style={styles.subtitle}>
+                    Erstelle dein Profil und starte mit Kalendulu.
+                  </Text>
+
+                  <Text style={styles.label}>Name</Text>
+                  <TextInput
+                    value={fullName}
+                    onChangeText={setFullName}
+                    placeholder="Dein Name"
+                    placeholderTextColor="#91A0BB"
+                    autoCapitalize="words"
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.label}>E-Mail</Text>
+                  <TextInput
+                    value={email}
+                    onChangeText={setEmail}
+                    placeholder="name@email.com"
+                    placeholderTextColor="#91A0BB"
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    style={styles.input}
+                  />
+
+                  <Text style={styles.label}>Passwort</Text>
+                  <TextInput
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholder="Mindestens 6 Zeichen"
+                    placeholderTextColor="#91A0BB"
+                    secureTextEntry
+                    style={styles.input}
+                  />
+
+                  <Pressable
+                    onPress={onRegister}
+                    disabled={busy !== null}
+                    style={[styles.primaryButton, busy ? styles.buttonDisabled : null]}
+                  >
+                    {busy === 'email' ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.primaryButtonText}>Registrieren</Text>
+                    )}
+                  </Pressable>
+
+                  <View style={styles.dividerRow}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>oder</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+
+                  <Pressable
+                    onPress={onApple}
+                    disabled={busy !== null}
+                    style={[styles.appleButton, busy ? styles.buttonDisabled : null]}
+                  >
+                    {busy === 'apple' ? (
+                      <ActivityIndicator color="#FFFFFF" />
+                    ) : (
+                      <Text style={styles.appleButtonText}>Mit Apple fortfahren</Text>
+                    )}
+                  </Pressable>
+
+                  <Pressable
+                    onPress={onGoogle}
+                    disabled={busy !== null}
+                    style={[styles.googleButton, busy ? styles.buttonDisabled : null]}
+                  >
+                    {busy === 'google' ? (
+                      <ActivityIndicator color="#2A3550" />
+                    ) : (
+                      <Text style={styles.googleButtonText}>Mit Google fortfahren</Text>
+                    )}
+                  </Pressable>
+
+                  <Link href="/login" asChild>
+                    <Pressable style={styles.linkWrap}>
+                      <Text style={styles.linkText}>Bereits ein Konto? Anmelden</Text>
+                    </Pressable>
+                  </Link>
+                </View>
+              </View>
+            </ScrollView>
           </View>
-        </View>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  safe: { flex: 1 },
-  container: {
+  root: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 22,
+    backgroundColor: '#1E2758',
   },
-  title: {
-    fontSize: 30,
-    fontWeight: '800',
-    marginBottom: 8,
+  flex: {
+    flex: 1,
   },
-  subtitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    marginBottom: 24,
+  safe: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  fixedArtworkLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    zIndex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
+  cardWrap: {
+    paddingHorizontal: 24,
   },
   card: {
-    borderWidth: 1,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 390,
+    backgroundColor: 'rgba(247,248,252,0.95)',
     borderRadius: 22,
-    padding: 18,
+    paddingHorizontal: 15,
+    paddingTop: 12,
+    paddingBottom: 10,
+    shadowColor: '#1D2951',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+  title: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#26324A',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#73809A',
+    marginBottom: 10,
   },
   label: {
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '700',
-    marginBottom: 8,
-    marginTop: 10,
+    color: '#2B3852',
+    marginBottom: 5,
+    marginTop: 7,
   },
   input: {
+    height: 44,
+    borderRadius: 13,
     borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 16,
+    borderColor: '#CAD3E3',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 13,
+    color: '#24304A',
+    fontSize: 14,
   },
-  button: {
-    marginTop: 18,
-    borderRadius: 16,
+  primaryButton: {
+    height: 44,
+    borderRadius: 13,
+    backgroundColor: '#3E6FDC',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 15,
+    marginTop: 12,
   },
-  buttonText: {
-    fontSize: 16,
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '800',
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 12,
+    marginBottom: 10,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#D6DCE8',
+  },
+  dividerText: {
+    color: '#7F8BA3',
+    fontSize: 12,
+    fontWeight: '700',
+    marginHorizontal: 10,
+    textTransform: 'lowercase',
+  },
+  appleButton: {
+    height: 42,
+    borderRadius: 13,
+    backgroundColor: '#151B2D',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  appleButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  googleButton: {
+    height: 42,
+    borderRadius: 13,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CAD3E3',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleButtonText: {
+    color: '#2B3852',
+    fontSize: 14,
+    fontWeight: '700',
   },
   linkWrap: {
     alignItems: 'center',
-    marginTop: 18,
-    paddingVertical: 8,
+    marginTop: 8,
+    paddingVertical: 4,
   },
   linkText: {
-    fontSize: 14,
+    color: '#3E6FDC',
+    fontSize: 12,
     fontWeight: '700',
+  },
+  buttonDisabled: {
+    opacity: 0.72,
   },
 });
