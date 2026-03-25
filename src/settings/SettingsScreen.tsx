@@ -1,20 +1,25 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Image,
   Pressable,
   SafeAreaView,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { ThemeColors } from '@/src/theme/themes';
 import { useAuth } from '@/src/auth/AuthProvider';
+import { supabase } from '@/src/lib/supabase';
 import {
   clearCalendarStorage,
   exportCalendarAsICS,
@@ -23,6 +28,8 @@ import {
   importCalendarFromICS,
   importCalendarFromJSON,
 } from '@/src/calendar/calendarImportExport';
+
+const PROFILE_IMAGE_STORAGE_KEY = 'kalendulu:profile-image-uri:v1';
 
 const editableColorKeys: (keyof ThemeColors)[] = [
   'background',
@@ -249,6 +256,64 @@ function SectionButton({
   );
 }
 
+function ToggleRow({
+  title,
+  subtitle,
+  value,
+  onValueChange,
+  colors,
+  fontFamily,
+}: {
+  title: string;
+  subtitle?: string;
+  value: boolean;
+  onValueChange: (next: boolean) => void;
+  colors: ReturnType<typeof useAppTheme>['colors'];
+  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'];
+}) {
+  return (
+    <View
+      style={{
+        minHeight: 72,
+        paddingHorizontal: 14,
+        paddingVertical: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+      }}
+    >
+      <View style={{ flex: 1, paddingRight: 12 }}>
+        <Text
+          style={{
+            color: colors.text,
+            fontSize: 15,
+            fontWeight: '900',
+            fontFamily: fontFamily.bold,
+          }}
+        >
+          {title}
+        </Text>
+        {!!subtitle && (
+          <Text
+            style={{
+              marginTop: 4,
+              fontSize: 13,
+              lineHeight: 18,
+              opacity: 0.78,
+              color: colors.textMuted,
+              fontFamily: fontFamily.regular,
+            }}
+          >
+            {subtitle}
+          </Text>
+        )}
+      </View>
+
+      <Switch value={value} onValueChange={onValueChange} />
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const {
     colors,
@@ -279,6 +344,15 @@ export default function SettingsScreen() {
     newestEvent?: string;
   } | null>(null);
 
+  const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
+  const [nameInput, setNameInput] = useState('');
+  const [savingName, setSavingName] = useState(false);
+
+  const [todoNotifications, setTodoNotifications] = useState(true);
+  const [habitNotifications, setHabitNotifications] = useState(true);
+  const [eventNotifications, setEventNotifications] = useState(true);
+  const [dailySummaryNotifications, setDailySummaryNotifications] = useState(false);
+
   const styles = makeStyles(colors, fontFamily);
 
   const displayName = useMemo(() => {
@@ -301,11 +375,94 @@ export default function SettingsScreen() {
   }
 
   useEffect(() => {
+    setNameInput(displayName);
+  }, [displayName]);
+
+  useEffect(() => {
     void refreshStorageStats();
+  }, []);
+
+  useEffect(() => {
+    const loadProfileImage = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(PROFILE_IMAGE_STORAGE_KEY);
+        if (saved) setProfileImageUri(saved);
+      } catch {}
+    };
+
+    void loadProfileImage();
   }, []);
 
   function toggleSection(section: SettingsSection) {
     setOpenSection((prev) => (prev === section ? null : section));
+  }
+
+  function openAccountSection() {
+    setOpenSection('account');
+  }
+
+  async function pickProfileImage() {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+      if (!permission.granted) {
+        Alert.alert('Zugriff benötigt', 'Bitte erlaube den Zugriff auf deine Fotos.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (result.canceled || !result.assets?.length) return;
+
+      const uri = result.assets[0].uri;
+      setProfileImageUri(uri);
+      await AsyncStorage.setItem(PROFILE_IMAGE_STORAGE_KEY, uri);
+    } catch {
+      Alert.alert('Fehler', 'Das Profilbild konnte nicht ausgewählt werden.');
+    }
+  }
+
+  async function removeProfileImage() {
+    try {
+      setProfileImageUri(null);
+      await AsyncStorage.removeItem(PROFILE_IMAGE_STORAGE_KEY);
+    } catch {
+      Alert.alert('Fehler', 'Das Profilbild konnte nicht entfernt werden.');
+    }
+  }
+
+  async function saveDisplayName() {
+    const cleaned = nameInput.trim();
+
+    if (!cleaned) {
+      Alert.alert('Hinweis', 'Bitte gib einen Namen ein.');
+      return;
+    }
+
+    try {
+      setSavingName(true);
+
+      const { error } = await supabase.auth.updateUser({
+        data: {
+          full_name: cleaned,
+        },
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      Alert.alert('Gespeichert', 'Dein Name wurde aktualisiert.');
+    } catch (error: any) {
+      Alert.alert('Fehler', error?.message ?? 'Der Name konnte nicht gespeichert werden.');
+    } finally {
+      setSavingName(false);
+    }
   }
 
   function askImportType() {
@@ -416,6 +573,16 @@ export default function SettingsScreen() {
     );
   }
 
+  function askDeleteAccount() {
+    Alert.alert(
+      'Account löschen',
+      'Dieser Button ist jetzt in der App ergänzt. Für die echte Löschung des Supabase-Auth-Users brauchen wir im nächsten Schritt noch eine sichere Edge Function oder Server-Funktion.',
+      [
+        { text: 'OK', style: 'default' },
+      ]
+    );
+  }
+
   async function handleLogout() {
     try {
       await signOut();
@@ -432,9 +599,16 @@ export default function SettingsScreen() {
           <Text style={styles.screenTitle}>Einstellungen</Text>
         </View>
 
-        <View style={styles.accountCard}>
+        <Pressable
+          onPress={openAccountSection}
+          style={({ pressed }) => [styles.accountCard, { opacity: pressed ? 0.9 : 1 }]}
+        >
           <View style={styles.avatar}>
-            <Ionicons name="person" size={26} color={colors.primaryText} />
+            {profileImageUri ? (
+              <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
+            ) : (
+              <Ionicons name="person" size={26} color={colors.primaryText} />
+            )}
           </View>
 
           <View style={{ flex: 1 }}>
@@ -443,7 +617,7 @@ export default function SettingsScreen() {
           </View>
 
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-        </View>
+        </Pressable>
 
         <View style={styles.groupCard}>
           <SectionButton
@@ -458,7 +632,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Kalender"
-            subtitle="Import, Export und lokale Daten verwalten"
+            subtitle="Import, Export, Anzeige und lokale Daten"
             icon="calendar-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -468,7 +642,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Konto"
-            subtitle="Login, Profil und Session"
+            subtitle="Profil, Bild, Login und Account"
             icon="person-circle-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -478,7 +652,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Benachrichtigungen"
-            subtitle="Später erweiterbar für Erinnerungen und Push"
+            subtitle="Todos, Habits, Termine und tägliche Hinweise"
             icon="notifications-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -488,7 +662,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Info"
-            subtitle="App, Sync, Backup und spätere Erweiterungen"
+            subtitle="App, Sync, Backup, Datenschutz und Version"
             icon="information-circle-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -686,12 +860,16 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Später erweiterbar</Text>
-              <Text style={styles.infoText}>• Standarddauer neuer Termine</Text>
-              <Text style={styles.infoText}>• Wochenstart Montag / Sonntag</Text>
+              <Text style={styles.detailTitle}>Weitere Kalendereinstellungen</Text>
+              <Text style={styles.infoText}>• Standarddauer neuer Termine: 30 / 60 / 90 Minuten</Text>
+              <Text style={styles.infoText}>• Wochenstart: Montag oder Sonntag</Text>
               <Text style={styles.infoText}>• Wiederholende Termine</Text>
-              <Text style={styles.infoText}>• Standard-Erinnerungen</Text>
+              <Text style={styles.infoText}>• Standard-Erinnerungen vor Terminen</Text>
+              <Text style={styles.infoText}>• Ganztägige Termine</Text>
               <Text style={styles.infoText}>• Zeitzone / Reisen</Text>
+              <Text style={styles.infoText}>• Standardansicht: Tag / Woche / Monat</Text>
+              <Text style={styles.infoText}>• Feiertage anzeigen</Text>
+              <Text style={styles.infoText}>• Sonntage farblich markieren</Text>
             </View>
           </>
         )}
@@ -699,7 +877,56 @@ export default function SettingsScreen() {
         {openSection === 'account' && (
           <>
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Konto</Text>
+              <Text style={styles.detailTitle}>Profil</Text>
+
+              <View style={styles.profileImageRow}>
+                <Pressable onPress={pickProfileImage} style={styles.profileImageButton}>
+                  <View style={styles.largeAvatar}>
+                    {profileImageUri ? (
+                      <Image source={{ uri: profileImageUri }} style={styles.largeAvatarImage} />
+                    ) : (
+                      <Ionicons name="camera-outline" size={28} color={colors.primaryText} />
+                    )}
+                  </View>
+                </Pressable>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.profileLabel}>Profilbild</Text>
+                  <Text style={styles.profileSubLabel}>
+                    Wähle ein Bild aus deiner Mediathek.
+                  </Text>
+
+                  <View style={styles.profileActionRow}>
+                    <Pressable onPress={pickProfileImage} style={styles.smallPrimaryBtn}>
+                      <Text style={styles.smallPrimaryBtnText}>Bild wählen</Text>
+                    </Pressable>
+
+                    <Pressable onPress={removeProfileImage} style={styles.smallSecondaryBtn}>
+                      <Text style={styles.smallSecondaryBtnText}>Entfernen</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              </View>
+
+              <Text style={[styles.detailTitle, { marginTop: 18 }]}>Name ändern</Text>
+
+              <TextInput
+                value={nameInput}
+                onChangeText={setNameInput}
+                placeholder="Dein Name"
+                placeholderTextColor={colors.textMuted}
+                style={styles.input}
+              />
+
+              <Pressable onPress={saveDisplayName} style={styles.primaryBtn}>
+                <Text style={styles.primaryBtnText}>
+                  {savingName ? 'Speichern...' : 'Name speichern'}
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Kontodaten</Text>
 
               <View style={styles.settingsList}>
                 <SettingsEntry
@@ -718,6 +945,15 @@ export default function SettingsScreen() {
                   colors={colors}
                   fontFamily={fontFamily}
                 />
+                <View style={styles.separatorInner} />
+
+                <SettingsEntry
+                  title="Login-Anbieter"
+                  subtitle="E-Mail, Apple oder Google je nach Anmeldung"
+                  value={user?.app_metadata?.provider ?? 'Unbekannt'}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
               </View>
             </View>
 
@@ -726,30 +962,97 @@ export default function SettingsScreen() {
                 <Ionicons name="log-out-outline" size={18} color="#FFFFFF" />
                 <Text style={styles.logoutText}>Abmelden</Text>
               </Pressable>
+
+              <Pressable onPress={askDeleteAccount} style={styles.deleteAccountButton}>
+                <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.logoutText}>Account löschen</Text>
+              </Pressable>
             </View>
           </>
         )}
 
         {openSection === 'notifications' && (
-          <View style={styles.detailCard}>
-            <Text style={styles.detailTitle}>Benachrichtigungen</Text>
-            <Text style={styles.infoText}>• Push-Benachrichtigungen</Text>
-            <Text style={styles.infoText}>• Termin-Erinnerungen</Text>
-            <Text style={styles.infoText}>• Habit-Erinnerungen</Text>
-            <Text style={styles.infoText}>• Ziel- und Fortschritts-Hinweise</Text>
-          </View>
+          <>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Benachrichtigungen</Text>
+
+              <View style={styles.settingsList}>
+                <ToggleRow
+                  title="Todo-Erinnerungen"
+                  subtitle="Benachrichtigungen für offene Aufgaben"
+                  value={todoNotifications}
+                  onValueChange={setTodoNotifications}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+
+                <ToggleRow
+                  title="Habit-Erinnerungen"
+                  subtitle="Erinnerungen für tägliche und wiederkehrende Gewohnheiten"
+                  value={habitNotifications}
+                  onValueChange={setHabitNotifications}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+
+                <ToggleRow
+                  title="Termin-Erinnerungen"
+                  subtitle="Hinweise vor Kalenderterminen"
+                  value={eventNotifications}
+                  onValueChange={setEventNotifications}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+
+                <ToggleRow
+                  title="Tägliche Zusammenfassung"
+                  subtitle="Ein kompakter Überblick über deinen Tag"
+                  value={dailySummaryNotifications}
+                  onValueChange={setDailySummaryNotifications}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+              </View>
+            </View>
+
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Geplante Erweiterungen</Text>
+              <Text style={styles.infoText}>• Uhrzeit für Habit-Erinnerungen</Text>
+              <Text style={styles.infoText}>• Erinnerung vor Todos nach Priorität</Text>
+              <Text style={styles.infoText}>• Benachrichtigungen pro Kalender</Text>
+              <Text style={styles.infoText}>• Ruhezeiten / Nicht stören</Text>
+              <Text style={styles.infoText}>• Smarte Tageszusammenfassung</Text>
+            </View>
+          </>
         )}
 
         {openSection === 'about' && (
-          <View style={styles.detailCard}>
-            <Text style={styles.detailTitle}>Info & später erweiterbar</Text>
-            <Text style={styles.infoText}>• Login / Account</Text>
-            <Text style={styles.infoText}>• Profilbild</Text>
-            <Text style={styles.infoText}>• Sync / Backup</Text>
-            <Text style={styles.infoText}>• Premium / Abo</Text>
-            <Text style={styles.infoText}>• Datenschutz / Impressum</Text>
-            <Text style={styles.infoText}>• App-Version und Changelog</Text>
-          </View>
+          <>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Info</Text>
+              <Text style={styles.infoText}>• App-Name: Kalendulu</Text>
+              <Text style={styles.infoText}>• Version und Changelog</Text>
+              <Text style={styles.infoText}>• Login / Account</Text>
+              <Text style={styles.infoText}>• Profilbild</Text>
+              <Text style={styles.infoText}>• Sync / Backup</Text>
+              <Text style={styles.infoText}>• Premium / Abo</Text>
+              <Text style={styles.infoText}>• Datenschutz / Impressum</Text>
+              <Text style={styles.infoText}>• Hilfe / Support</Text>
+              <Text style={styles.infoText}>• Feedback senden</Text>
+            </View>
+
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Später erweiterbar</Text>
+              <Text style={styles.infoText}>• iCloud / Cloud Sync</Text>
+              <Text style={styles.infoText}>• Geräteübergreifendes Backup</Text>
+              <Text style={styles.infoText}>• Export kompletter App-Daten</Text>
+              <Text style={styles.infoText}>• Premium-Funktionen</Text>
+              <Text style={styles.infoText}>• KI-Statistiken und tiefergehende Analysen</Text>
+            </View>
+          </>
         )}
       </ScrollView>
     </SafeAreaView>
@@ -800,6 +1103,11 @@ function makeStyles(
       alignItems: 'center',
       justifyContent: 'center',
       backgroundColor: colors.primary,
+      overflow: 'hidden',
+    },
+    avatarImage: {
+      width: '100%',
+      height: '100%',
     },
     accountName: {
       color: colors.text,
@@ -975,10 +1283,82 @@ function makeStyles(
       justifyContent: 'center',
       flexDirection: 'row',
       gap: 8,
+      marginBottom: 12,
+    },
+    deleteAccountButton: {
+      minHeight: 54,
+      borderRadius: 16,
+      backgroundColor: '#7F1D1D',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexDirection: 'row',
+      gap: 8,
     },
     logoutText: {
       color: '#FFFFFF',
       fontSize: 16,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    profileImageRow: {
+      flexDirection: 'row',
+      gap: 14,
+      alignItems: 'center',
+    },
+    profileImageButton: {
+      borderRadius: 999,
+    },
+    largeAvatar: {
+      width: 84,
+      height: 84,
+      borderRadius: 999,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      overflow: 'hidden',
+    },
+    largeAvatarImage: {
+      width: '100%',
+      height: '100%',
+    },
+    profileLabel: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    profileSubLabel: {
+      color: colors.textMuted,
+      marginTop: 4,
+      lineHeight: 19,
+      fontFamily: fontFamily.regular,
+    },
+    profileActionRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 12,
+    },
+    smallPrimaryBtn: {
+      backgroundColor: colors.primary,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+    },
+    smallPrimaryBtnText: {
+      color: colors.primaryText,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    smallSecondaryBtn: {
+      backgroundColor: colors.cardSecondary,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 12,
+    },
+    smallSecondaryBtnText: {
+      color: colors.text,
       fontWeight: '900',
       fontFamily: fontFamily.bold,
     },

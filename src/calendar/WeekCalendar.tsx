@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  PanResponder,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -170,6 +171,51 @@ function getThemedEventColor(
   return eventPalette[colorIndex % eventPalette.length] ?? fallback;
 }
 
+function getAustriaHolidayName(date: dayjs.Dayjs) {
+  const year = date.year();
+  const easterSunday = getEasterSunday(year);
+
+  const holidays: Record<string, string> = {
+    [`${year}-01-01`]: 'Neujahr',
+    [`${year}-01-06`]: 'Heilige Drei Könige',
+    [`${year}-05-01`]: 'Staatsfeiertag',
+    [`${year}-08-15`]: 'Mariä Himmelfahrt',
+    [`${year}-10-26`]: 'Nationalfeiertag',
+    [`${year}-11-01`]: 'Allerheiligen',
+    [`${year}-12-08`]: 'Mariä Empfängnis',
+    [`${year}-12-25`]: 'Christtag',
+    [`${year}-12-26`]: 'Stefanitag',
+    [easterSunday.subtract(2, 'day').format('YYYY-MM-DD')]: 'Karfreitag',
+    [easterSunday.format('YYYY-MM-DD')]: 'Ostersonntag',
+    [easterSunday.add(1, 'day').format('YYYY-MM-DD')]: 'Ostermontag',
+    [easterSunday.add(39, 'day').format('YYYY-MM-DD')]: 'Christi Himmelfahrt',
+    [easterSunday.add(49, 'day').format('YYYY-MM-DD')]: 'Pfingstsonntag',
+    [easterSunday.add(50, 'day').format('YYYY-MM-DD')]: 'Pfingstmontag',
+    [easterSunday.add(60, 'day').format('YYYY-MM-DD')]: 'Fronleichnam',
+  };
+
+  return holidays[date.format('YYYY-MM-DD')] ?? null;
+}
+
+function getEasterSunday(year: number) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+
+  return dayjs(new Date(year, month - 1, day));
+}
+
 function ModeButton({
   label,
   active,
@@ -204,11 +250,11 @@ function formatRangeSingleLine(mode: CalendarMode, anchorDate: Date, shownDays: 
     return first.format('D. MMMM');
   }
 
-  if (first.month() === last.month()) {
-    return `${first.format('D. MMM')} - ${last.format('D. MMM')}`;
-  }
-
   return `${first.format('D. MMM')} - ${last.format('D. MMM')}`;
+}
+
+function formatEventListTime(event: CalEvent) {
+  return `${dayjs(event.start).format('HH:mm')} – ${dayjs(event.end).format('HH:mm')}`;
 }
 
 export default function WeekCalendar() {
@@ -220,6 +266,8 @@ export default function WeekCalendar() {
 
   const [mode, setMode] = useState<CalendarMode>('five');
   const [anchorDate, setAnchorDate] = useState<Date>(new Date());
+  const [selectedMonthDate, setSelectedMonthDate] = useState<Date>(new Date());
+  const [monthAgendaCollapsed, setMonthAgendaCollapsed] = useState(false);
 
   const [modalVisible, setModalVisible] = useState(false);
   const [modalDefaultDate, setModalDefaultDate] = useState<Date>(new Date());
@@ -241,6 +289,19 @@ export default function WeekCalendar() {
   const hourLabels = useMemo(
     () => Array.from({ length: HOUR_COUNT + 1 }, (_, index) => HOURS_START + index),
     [],
+  );
+
+  const selectedMonthDay = useMemo(() => dayjs(selectedMonthDate), [selectedMonthDate]);
+
+  const selectedMonthDayEvents = useMemo(() => {
+    return events
+      .filter((event) => dayjs(event.start).isSame(selectedMonthDay, 'day'))
+      .sort((a, b) => dayjs(a.start).valueOf() - dayjs(b.start).valueOf());
+  }, [events, selectedMonthDay]);
+
+  const selectedMonthHoliday = useMemo(
+    () => getAustriaHolidayName(selectedMonthDay),
+    [selectedMonthDay],
   );
 
   useEffect(() => {
@@ -269,7 +330,9 @@ export default function WeekCalendar() {
 
   const moveRange = (direction: -1 | 1) => {
     if (mode === 'month') {
-      setAnchorDate(dayjs(anchorDate).add(direction, 'month').toDate());
+      const next = dayjs(anchorDate).add(direction, 'month').toDate();
+      setAnchorDate(next);
+      setSelectedMonthDate(dayjs(selectedMonthDate).add(direction, 'month').toDate());
       return;
     }
 
@@ -284,9 +347,44 @@ export default function WeekCalendar() {
     return (hourFloat - HOURS_START) * HOUR_HEIGHT;
   }, [now]);
 
+  const swipeResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          const horizontal = Math.abs(gestureState.dx) > 18;
+          return horizontal && Math.abs(gestureState.dx) > Math.abs(gestureState.dy);
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          if (gestureState.dx <= -50) {
+            moveRange(1);
+          } else if (gestureState.dx >= 50) {
+            moveRange(-1);
+          }
+        },
+      }),
+    [mode, anchorDate, selectedMonthDate],
+  );
+
+  const monthAgendaPullResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_, gestureState) => {
+          return Math.abs(gestureState.dy) > 14 && Math.abs(gestureState.dy) > Math.abs(gestureState.dx);
+        },
+        onPanResponderRelease: (_, gestureState) => {
+          if (gestureState.dy > 65) {
+            setMonthAgendaCollapsed(true);
+          } else if (gestureState.dy < -65) {
+            setMonthAgendaCollapsed(false);
+          }
+        },
+      }),
+    [],
+  );
+
   return (
     <SafeAreaView style={styles.safe}>
-      <View style={styles.container}>
+      <View style={styles.container} {...swipeResponder.panHandlers}>
         <View style={styles.topCard}>
           <View style={styles.topNavRow}>
             <Pressable onPress={() => moveRange(-1)} style={styles.arrowBtn}>
@@ -305,7 +403,15 @@ export default function WeekCalendar() {
           </View>
 
           <View style={styles.bottomControlRow}>
-            <Pressable onPress={() => setAnchorDate(new Date())} style={styles.todayBtn}>
+            <Pressable
+              onPress={() => {
+                const today = new Date();
+                setAnchorDate(today);
+                setSelectedMonthDate(today);
+                setMode('day');
+              }}
+              style={styles.todayBtn}
+            >
               <Text style={styles.todayBtnText}>Heute</Text>
             </Pressable>
 
@@ -331,145 +437,276 @@ export default function WeekCalendar() {
         </View>
 
         {mode === 'month' ? (
-          <View style={styles.monthWrap}>
-            <MonthView
-  monthDate={anchorDate}
-  events={events}
-  onSelectDay={(date) => {
-    setAnchorDate(date);
-    setMode('day');
-  }}
-/>
+          <View style={styles.monthAppleWrap}>
+            <Pressable
+              onPress={() => setMonthAgendaCollapsed((prev) => !prev)}
+              style={[
+                styles.monthCompactCard,
+                monthAgendaCollapsed
+                  ? styles.monthCompactCardExpanded
+                  : styles.monthCompactCardHalf,
+              ]}
+            >
+              <MonthView
+                monthDate={anchorDate}
+                events={events}
+                selectedDate={selectedMonthDate}
+                onSelectDay={(date) => {
+                  setSelectedMonthDate(date);
+                }}
+              />
+            </Pressable>
+
+            {!monthAgendaCollapsed ? (
+              <View
+                style={styles.monthAgendaCardHalf}
+                {...monthAgendaPullResponder.panHandlers}
+              >
+                <View style={styles.monthDragHandleWrap}>
+                  <View style={styles.monthDragHandle} />
+                </View>
+
+                <View style={styles.selectedDayHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.selectedDayTitle}>
+                      {selectedMonthDay.format('dddd, D. MMMM')}
+                    </Text>
+                    {selectedMonthHoliday ? (
+                      <Text style={styles.selectedDayHoliday}>{selectedMonthHoliday}</Text>
+                    ) : selectedMonthDay.day() === 0 ? (
+                      <Text style={styles.selectedDaySunday}>Sonntag</Text>
+                    ) : null}
+                  </View>
+
+                  <Pressable
+                    onPress={() => {
+                      setAnchorDate(selectedMonthDate);
+                      setMode('day');
+                    }}
+                    style={styles.jumpToDayBtn}
+                  >
+                    <Text style={styles.jumpToDayBtnText}>Tag öffnen</Text>
+                  </Pressable>
+                </View>
+
+                <ScrollView
+                  style={styles.monthListScroll}
+                  contentContainerStyle={styles.monthListContent}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {selectedMonthDayEvents.length === 0 ? (
+                    <View style={styles.emptyListCard}>
+                      <Text style={styles.emptyListTitle}>Keine Termine</Text>
+                      <Text style={styles.emptyListSub}>
+                        Für diesen Tag sind aktuell keine Termine eingetragen.
+                      </Text>
+                    </View>
+                  ) : (
+                    selectedMonthDayEvents.map((event) => {
+                      const themedEventColor = getThemedEventColor(
+                        event.colorIndex,
+                        eventPalette,
+                        colors.primary,
+                      );
+
+                      return (
+                        <Pressable
+                          key={event.id}
+                          onPress={() => openExistingEvent(event)}
+                          style={[styles.listEventCard, { borderLeftColor: themedEventColor }]}
+                        >
+                          <View style={styles.listEventTopRow}>
+                            <Text style={styles.listEventTitle}>{event.title}</Text>
+                            <Text style={[styles.listEventTime, { color: themedEventColor }]}>
+                              {formatEventListTime(event)}
+                            </Text>
+                          </View>
+
+                          {!!event.location?.trim() && (
+                            <Text style={styles.listEventMeta}>{event.location.trim()}</Text>
+                          )}
+
+                          {!!event.description?.trim() && (
+                            <Text style={styles.listEventDescription}>
+                              {event.description.trim()}
+                            </Text>
+                          )}
+                        </Pressable>
+                      );
+                    })
+                  )}
+                </ScrollView>
+              </View>
+            ) : (
+              <View style={styles.monthCollapsedHintWrap}>
+                <Text style={styles.monthCollapsedHintText}>
+                  Monatsübersicht geöffnet · Tippe auf den Monat oder ziehe später wieder nach oben, um die Terminliste anzuzeigen.
+                </Text>
+              </View>
+            )}
           </View>
         ) : (
-          <ScrollView
-            ref={verticalScrollRef}
-            style={styles.calendarScroll}
-            contentContainerStyle={styles.calendarContent}
-            showsVerticalScrollIndicator={false}
-          >
+          <View style={styles.weekWrap}>
             <View style={styles.dayHeaderRow}>
               <View style={styles.timeHeaderSpacer} />
               {shownDays.map((day) => {
                 const isToday = day.isSame(dayjs(), 'day');
+                const isSunday = day.day() === 0;
+                const holidayName = getAustriaHolidayName(day);
 
                 return (
                   <View key={day.format('YYYY-MM-DD')} style={styles.dayHeaderCell}>
-                    <Text style={[styles.dayHeaderTop, isToday && styles.dayHeaderTopToday]}>
+                    <Text
+                      style={[
+                        styles.dayHeaderTop,
+                        isToday && styles.dayHeaderTopToday,
+                        (isSunday || holidayName) && styles.dayHeaderTopSpecial,
+                      ]}
+                    >
                       {day.format('dd').toUpperCase()}
                     </Text>
-                    <Text style={[styles.dayHeaderBottom, isToday && styles.dayHeaderBottomToday]}>
+                    <Text
+                      style={[
+                        styles.dayHeaderBottom,
+                        isToday && styles.dayHeaderBottomToday,
+                        (isSunday || holidayName) && styles.dayHeaderBottomSpecial,
+                      ]}
+                    >
                       {day.format('D')}
                     </Text>
+                    {holidayName ? (
+                      <Text numberOfLines={1} style={styles.dayHeaderHoliday}>
+                        {holidayName}
+                      </Text>
+                    ) : isSunday ? (
+                      <Text numberOfLines={1} style={styles.dayHeaderHoliday}>
+                        Sonntag
+                      </Text>
+                    ) : null}
                   </View>
                 );
               })}
             </View>
 
-            <View style={styles.bodyRow}>
-              <View style={styles.timeColumn}>
-                {hourLabels.slice(0, -1).map((hour) => (
-                  <View key={hour} style={styles.timeSlot}>
-                    <Text style={styles.timeLabel}>{`${String(hour).padStart(2, '0')}:00`}</Text>
-                  </View>
-                ))}
-              </View>
+            <ScrollView
+              ref={verticalScrollRef}
+              style={styles.calendarScroll}
+              contentContainerStyle={styles.calendarContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.bodyRow}>
+                <View style={styles.timeColumn}>
+                  {hourLabels.slice(0, -1).map((hour) => (
+                    <View key={hour} style={styles.timeSlot}>
+                      <Text style={styles.timeLabel}>{`${String(hour).padStart(2, '0')}:00`}</Text>
+                    </View>
+                  ))}
+                </View>
 
-              <View style={styles.daysArea}>
-                {shownDays.map((day) => {
-                  const key = day.format('YYYY-MM-DD');
-                  const dayEvents = events.filter((event) => dayjs(event.start).isSame(day, 'day'));
-                  const dayWidthPercent = 100 / shownDays.length;
-                  const layout = buildLayoutForDay(dayEvents, 1);
+                <View style={styles.daysArea}>
+                  {shownDays.map((day) => {
+                    const key = day.format('YYYY-MM-DD');
+                    const dayEvents = events.filter((event) => dayjs(event.start).isSame(day, 'day'));
+                    const dayWidthPercent = 100 / shownDays.length;
+                    const layout = buildLayoutForDay(dayEvents, 1);
+                    const isSunday = day.day() === 0;
+                    const holidayName = getAustriaHolidayName(day);
 
-                  return (
-                    <View
-                      key={key}
-                      style={[
-                        styles.dayColumn,
-                        shownDays.length > 1 && { width: `${dayWidthPercent}%` },
-                      ]}
-                    >
-                      {hourLabels.slice(0, -1).map((hour) => (
-                        <Pressable
-                          key={`${key}_${hour}`}
-                          onPress={() => createFromSlot(day, hour)}
-                          style={styles.hourCell}
-                        >
-                          <View style={styles.hourLine} />
-                        </Pressable>
-                      ))}
-
-                      {dayjs(now).isSame(day, 'day') && todayLine !== null ? (
-                        <View style={[styles.nowLineWrap, { top: todayLine }]}>
-                          <View style={styles.nowDot} />
-                          <View style={styles.nowLine} />
-                        </View>
-                      ) : null}
-
-                      {layout.map(({ event, top, height, left, width }) => {
-                        const primary = getEventPrimaryLabel(event, height);
-                        const secondary = getEventSecondaryLabel(event, height);
-                        const fontSize = getEventFontSize(height);
-                        const subFontSize = getSubFontSize(height);
-                        const compact = height < 30;
-                        const themedEventColor = getThemedEventColor(
-  event.colorIndex,
-  eventPalette,
-  colors.primary
-);
-
-                        return (
+                    return (
+                      <View
+                        key={key}
+                        style={[
+                          styles.dayColumn,
+                          shownDays.length > 1 && { width: `${dayWidthPercent}%` },
+                          (isSunday || holidayName) && styles.dayColumnSpecial,
+                        ]}
+                      >
+                        {hourLabels.slice(0, -1).map((hour) => (
                           <Pressable
-                            key={event.id}
-                            onPress={() => openExistingEvent(event)}
-                            style={[
-                              styles.eventCard,
-                              {
-                                top,
-                                left: `${left * 100}%`,
-                                width: `${width * 100}%`,
-                                height,
-                                borderLeftColor: themedEventColor,
-                              },
-                            ]}
+                            key={`${key}_${hour}`}
+                            onPress={() => createFromSlot(day, hour)}
+                            style={styles.hourCell}
                           >
-                            <Text
-                              numberOfLines={compact ? 1 : 2}
+                            <View
                               style={[
-                                styles.eventTitle,
-                                { fontSize, lineHeight: fontSize + 2 },
+                                styles.hourLine,
+                                (isSunday || holidayName) && styles.hourLineSpecial,
+                              ]}
+                            />
+                          </Pressable>
+                        ))}
+
+                        {dayjs(now).isSame(day, 'day') && todayLine !== null ? (
+                          <View style={[styles.nowLineWrap, { top: todayLine }]}>
+                            <View style={styles.nowDot} />
+                            <View style={styles.nowLine} />
+                          </View>
+                        ) : null}
+
+                        {layout.map(({ event, top, height, left, width }) => {
+                          const primary = getEventPrimaryLabel(event, height);
+                          const secondary = getEventSecondaryLabel(event, height);
+                          const fontSize = getEventFontSize(height);
+                          const subFontSize = getSubFontSize(height);
+                          const compact = height < 30;
+                          const themedEventColor = getThemedEventColor(
+                            event.colorIndex,
+                            eventPalette,
+                            colors.primary,
+                          );
+
+                          return (
+                            <Pressable
+                              key={event.id}
+                              onPress={() => openExistingEvent(event)}
+                              style={[
+                                styles.eventCard,
+                                {
+                                  top,
+                                  left: `${left * 100}%`,
+                                  width: `${width * 100}%`,
+                                  height,
+                                  borderLeftColor: themedEventColor,
+                                },
                               ]}
                             >
-                              {primary}
-                            </Text>
-
-                            {secondary ? (
                               <Text
-                                numberOfLines={height < 96 ? 1 : 2}
+                                numberOfLines={compact ? 1 : 2}
                                 style={[
-                                  styles.eventSub,
-                                  { fontSize: subFontSize, lineHeight: subFontSize + 2 },
+                                  styles.eventTitle,
+                                  { fontSize, lineHeight: fontSize + 2 },
                                 ]}
                               >
-                                {secondary}
+                                {primary}
                               </Text>
-                            ) : null}
 
-                            {height >= 54 ? (
-                              <Text style={[styles.eventTime, { color: themedEventColor }]}>
-                                {dayjs(event.start).format('HH:mm')}–{dayjs(event.end).format('HH:mm')}
-                              </Text>
-                            ) : null}
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  );
-                })}
+                              {secondary ? (
+                                <Text
+                                  numberOfLines={height < 96 ? 1 : 2}
+                                  style={[
+                                    styles.eventSub,
+                                    { fontSize: subFontSize, lineHeight: subFontSize + 2 },
+                                  ]}
+                                >
+                                  {secondary}
+                                </Text>
+                              ) : null}
+
+                              {height >= 54 ? (
+                                <Text style={[styles.eventTimeInline, { color: themedEventColor }]}>
+                                  {dayjs(event.start).format('HH:mm')}–{dayjs(event.end).format('HH:mm')}
+                                </Text>
+                              ) : null}
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    );
+                  })}
+                </View>
               </View>
-            </View>
-          </ScrollView>
+            </ScrollView>
+          </View>
         )}
 
         <EventModal
@@ -531,6 +768,7 @@ function createStyles(
       fontWeight: '900',
       textAlign: 'center',
       fontFamily: fontFamily.bold,
+      textTransform: 'capitalize',
     },
     arrowBtn: {
       width: 48,
@@ -616,22 +854,190 @@ function createStyles(
       marginTop: -1,
       fontFamily: fontFamily.bold,
     },
-    monthWrap: {
+
+    monthAppleWrap: {
       flex: 1,
-      paddingHorizontal: 14,
-      paddingBottom: 14,
+      paddingHorizontal: 12,
+      paddingBottom: 12,
+      gap: 8,
     },
-    calendarScroll: {
-      flex: 1,
-    },
-    calendarContent: {
+    monthCompactCard: {
+      borderRadius: 18,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
       paddingHorizontal: 8,
+      paddingTop: 8,
+      paddingBottom: 6,
+    },
+    monthCompactCardHalf: {
+      flex: 1,
+    },
+    monthCompactCardExpanded: {
+      flex: 1,
+    },
+    monthAgendaCardHalf: {
+      flex: 1,
+      borderRadius: 22,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: 'hidden',
+    },
+    monthDragHandleWrap: {
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingTop: 8,
+      paddingBottom: 4,
+    },
+    monthDragHandle: {
+      width: 42,
+      height: 5,
+      borderRadius: 99,
+      backgroundColor: colors.border,
+    },
+    monthCollapsedHintWrap: {
+      minHeight: 44,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+    },
+    monthCollapsedHintText: {
+      color: colors.textMuted,
+      fontSize: 12,
+      textAlign: 'center',
+      fontFamily: fontFamily.regular,
+    },
+
+    selectedDayHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 14,
+      paddingTop: 10,
+      paddingBottom: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      gap: 10,
+    },
+    selectedDayTitle: {
+      color: colors.text,
+      fontSize: 18,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+      textTransform: 'capitalize',
+    },
+    selectedDayHoliday: {
+      marginTop: 4,
+      color: colors.danger,
+      fontSize: 12,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+    },
+    selectedDaySunday: {
+      marginTop: 4,
+      color: colors.danger,
+      fontSize: 12,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+    },
+    jumpToDayBtn: {
+      minWidth: 86,
+      height: 36,
+      borderRadius: 999,
+      backgroundColor: colors.cardSecondary,
+      borderWidth: 1,
+      borderColor: colors.border,
+      alignItems: 'center',
+      justifyContent: 'center',
+      paddingHorizontal: 12,
+    },
+    jumpToDayBtnText: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+    },
+    monthListScroll: {
+      flex: 1,
+    },
+    monthListContent: {
+      padding: 12,
       paddingBottom: 28,
+      gap: 10,
+    },
+    emptyListCard: {
+      borderRadius: 18,
+      backgroundColor: colors.cardSecondary,
+      borderWidth: 1,
+      borderColor: colors.border,
+      padding: 16,
+    },
+    emptyListTitle: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    emptyListSub: {
+      marginTop: 6,
+      color: colors.textMuted,
+      lineHeight: 20,
+      fontFamily: fontFamily.regular,
+    },
+    listEventCard: {
+      borderRadius: 18,
+      backgroundColor: colors.cardSecondary,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderLeftWidth: 4,
+      padding: 14,
+    },
+    listEventTopRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      gap: 12,
+    },
+    listEventTitle: {
+      flex: 1,
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    listEventTime: {
+      fontSize: 12,
+      fontWeight: '900',
+      fontFamily: fontFamily.bold,
+    },
+    listEventMeta: {
+      marginTop: 8,
+      color: colors.text,
+      opacity: 0.82,
+      fontSize: 13,
+      fontFamily: fontFamily.regular,
+    },
+    listEventDescription: {
+      marginTop: 6,
+      color: colors.textMuted,
+      lineHeight: 19,
+      fontSize: 13,
+      fontFamily: fontFamily.regular,
+    },
+
+    weekWrap: {
+      flex: 1,
     },
     dayHeaderRow: {
       flexDirection: 'row',
       alignItems: 'stretch',
-      marginBottom: 4,
+      marginBottom: 0,
+      paddingHorizontal: 8,
+      paddingTop: 2,
+      paddingBottom: 6,
+      backgroundColor: colors.background,
+      zIndex: 10,
     },
     timeHeaderSpacer: {
       width: LEFT_GUTTER_COMPACT,
@@ -641,6 +1047,7 @@ function createStyles(
       alignItems: 'center',
       justifyContent: 'center',
       paddingVertical: 4,
+      minHeight: 56,
     },
     dayHeaderTop: {
       color: colors.textMuted,
@@ -651,6 +1058,9 @@ function createStyles(
     dayHeaderTopToday: {
       color: colors.primary,
     },
+    dayHeaderTopSpecial: {
+      color: colors.danger,
+    },
     dayHeaderBottom: {
       marginTop: 2,
       color: colors.text,
@@ -660,6 +1070,25 @@ function createStyles(
     },
     dayHeaderBottomToday: {
       color: colors.primary,
+    },
+    dayHeaderBottomSpecial: {
+      color: colors.danger,
+    },
+    dayHeaderHoliday: {
+      marginTop: 2,
+      color: colors.danger,
+      fontSize: 9,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+      textAlign: 'center',
+    },
+
+    calendarScroll: {
+      flex: 1,
+    },
+    calendarContent: {
+      paddingHorizontal: 8,
+      paddingBottom: 28,
     },
     bodyRow: {
       flexDirection: 'row',
@@ -695,6 +1124,9 @@ function createStyles(
       borderColor: colors.border,
       overflow: 'hidden',
     },
+    dayColumnSpecial: {
+      backgroundColor: colors.danger + '08',
+    },
     hourCell: {
       height: HOUR_HEIGHT,
     },
@@ -702,6 +1134,9 @@ function createStyles(
       borderTopWidth: 1,
       borderColor: colors.border,
       width: '100%',
+    },
+    hourLineSpecial: {
+      borderColor: colors.danger + '35',
     },
     nowLineWrap: {
       position: 'absolute',
@@ -748,7 +1183,7 @@ function createStyles(
       marginTop: 2,
       fontFamily: fontFamily.regular,
     },
-    eventTime: {
+    eventTimeInline: {
       marginTop: 3,
       fontSize: 9,
       fontWeight: '800',

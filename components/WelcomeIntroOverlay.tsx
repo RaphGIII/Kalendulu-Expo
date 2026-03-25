@@ -237,8 +237,6 @@ export default function WelcomeIntroOverlay({
             <Text style={styles.nameText}>{displayedName}</Text>
             <Animated.View style={[styles.cursor, cursorStyle]} />
           </Animated.View>
-
-          
         </Animated.View>
       </Animated.View>
     </Pressable>
@@ -317,20 +315,21 @@ const styles = StyleSheet.create({
   },
   nameText: {
     color: '#F8FAFC',
-    fontSize: 28,
-    lineHeight: 34,
-    letterSpacing: 1.2,
+    fontSize: 34,
+    lineHeight: 44,
+    letterSpacing: 0.3,
+    textAlign: 'center',
     fontFamily: Platform.select({
-      ios: 'Courier',
-      android: 'monospace',
-      default: 'monospace',
+      ios: 'Snell Roundhand',
+      android: 'serif',
+      default: 'serif',
     }),
-    fontWeight: '700',
+    fontWeight: '600',
   },
   cursor: {
     width: 2,
-    height: 28,
-    marginLeft: 4,
+    height: 30,
+    marginLeft: 6,
     borderRadius: 2,
     backgroundColor: '#F8FAFC',
   },
