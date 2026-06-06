@@ -1,4 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as ImagePicker from "expo-image-picker";
+import { useRouter } from "expo-router";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Image,
@@ -10,16 +14,9 @@ import {
   Text,
   TextInput,
   View,
-} from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+} from "react-native";
 
-import { useAppTheme } from '@/src/theme/ThemeProvider';
-import { ThemeColors } from '@/src/theme/themes';
-import { useAuth } from '@/src/auth/AuthProvider';
-import { supabase } from '@/src/lib/supabase';
+import { useAuth } from "@/src/auth/AuthProvider";
 import {
   clearCalendarStorage,
   exportCalendarAsICS,
@@ -27,7 +24,9 @@ import {
   getCalendarStorageStats,
   importCalendarFromICS,
   importCalendarFromJSON,
-} from '@/src/calendar/calendarImportExport';
+} from "@/src/calendar/calendarImportExport";
+import { supabase } from "@/src/lib/supabase";
+import { deleteCurrentAccount } from "@/src/services/accountDeletion";
 import {
   defaultAppSettings,
   HOLIDAY_COUNTRIES,
@@ -36,36 +35,43 @@ import {
   type AppSettings,
   type NotificationLeadTime,
   type TodoReminderMode,
-} from '@/src/settings/appSettings';
+} from "@/src/settings/appSettings";
+import { useAppTheme } from "@/src/theme/ThemeProvider";
+import { ThemeColors } from "@/src/theme/themes";
 
-const PROFILE_IMAGE_STORAGE_KEY = 'kalendulu:profile-image-uri:v1';
+const PROFILE_IMAGE_STORAGE_KEY = "kalendulu:profile-image-uri:v1";
 
 const editableColorKeys: (keyof ThemeColors)[] = [
-  'background',
-  'backgroundSecondary',
-  'card',
-  'cardSecondary',
-  'text',
-  'textMuted',
-  'border',
-  'primary',
-  'primaryText',
-  'success',
-  'warning',
-  'danger',
-  'tabBar',
-  'tabIconDefault',
-  'tabIconSelected',
+  "background",
+  "backgroundSecondary",
+  "card",
+  "cardSecondary",
+  "text",
+  "textMuted",
+  "border",
+  "primary",
+  "primaryText",
+  "success",
+  "warning",
+  "danger",
+  "tabBar",
+  "tabIconDefault",
+  "tabIconSelected",
 ];
 
 const fontOptions = [
-  { id: 'system', label: 'System' },
-  { id: 'inter', label: 'Inter' },
-  { id: 'serif', label: 'Playfair' },
-  { id: 'mono', label: 'Mono' },
+  { id: "system", label: "System" },
+  { id: "inter", label: "Inter" },
+  { id: "serif", label: "Playfair" },
+  { id: "mono", label: "Mono" },
 ] as const;
 
-type SettingsSection = 'themes' | 'calendar' | 'account' | 'notifications' | 'about';
+type SettingsSection =
+  | "themes"
+  | "calendar"
+  | "account"
+  | "notifications"
+  | "about";
 
 function ColorInput({
   label,
@@ -84,13 +90,15 @@ function ColorInput({
 }) {
   return (
     <View style={{ marginBottom: 12 }}>
-      <Text style={{ color: textColor, fontWeight: '800', marginBottom: 6 }}>{label}</Text>
+      <Text style={{ color: textColor, fontWeight: "800", marginBottom: 6 }}>
+        {label}
+      </Text>
       <TextInput
         value={value}
         onChangeText={onChange}
         autoCapitalize="characters"
         placeholder="#FFFFFF"
-        placeholderTextColor={textColor + '88'}
+        placeholderTextColor={textColor + "88"}
         style={{
           backgroundColor: bg,
           borderWidth: 1,
@@ -99,7 +107,7 @@ function ColorInput({
           paddingHorizontal: 14,
           paddingVertical: 12,
           color: textColor,
-          fontWeight: '700',
+          fontWeight: "700",
         }}
       />
     </View>
@@ -120,19 +128,22 @@ function SettingsEntry({
   value?: string;
   onPress?: () => void;
   destructive?: boolean;
-  colors: ReturnType<typeof useAppTheme>['colors'];
-  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'];
+  colors: ReturnType<typeof useAppTheme>["colors"];
+  fontFamily: ReturnType<typeof useAppTheme>["fontFamily"];
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [{ opacity: pressed ? 0.82 : 1 }]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [{ opacity: pressed ? 0.82 : 1 }]}
+    >
       <View
         style={{
           minHeight: 66,
           paddingHorizontal: 14,
           paddingVertical: 14,
-          flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'space-between',
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
         }}
       >
         <View style={{ flex: 1, paddingRight: 12 }}>
@@ -140,7 +151,7 @@ function SettingsEntry({
             style={{
               color: destructive ? colors.danger : colors.text,
               fontSize: 15,
-              fontWeight: '900',
+              fontWeight: "900",
               fontFamily: fontFamily.bold,
             }}
           >
@@ -162,12 +173,12 @@ function SettingsEntry({
           )}
         </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
           {!!value && (
             <Text
               style={{
                 fontSize: 13,
-                fontWeight: '800',
+                fontWeight: "800",
                 opacity: 0.82,
                 color: colors.textMuted,
                 fontFamily: fontFamily.bold,
@@ -176,7 +187,11 @@ function SettingsEntry({
               {value}
             </Text>
           )}
-          {onPress ? <Text style={{ fontSize: 22, opacity: 0.35, color: colors.text }}>›</Text> : null}
+          {onPress ? (
+            <Text style={{ fontSize: 22, opacity: 0.35, color: colors.text }}>
+              ›
+            </Text>
+          ) : null}
         </View>
       </View>
     </Pressable>
@@ -195,18 +210,21 @@ function SectionButton({
   title: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
-  colors: ReturnType<typeof useAppTheme>['colors'];
-  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'];
+  colors: ReturnType<typeof useAppTheme>["colors"];
+  fontFamily: ReturnType<typeof useAppTheme>["fontFamily"];
   active: boolean;
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [{ opacity: pressed ? 0.84 : 1 }]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [{ opacity: pressed ? 0.84 : 1 }]}
+    >
       <View
         style={{
           minHeight: 74,
-          flexDirection: 'row',
-          alignItems: 'center',
+          flexDirection: "row",
+          alignItems: "center",
           paddingHorizontal: 14,
           paddingVertical: 14,
         }}
@@ -216,8 +234,8 @@ function SectionButton({
             width: 36,
             height: 36,
             borderRadius: 11,
-            alignItems: 'center',
-            justifyContent: 'center',
+            alignItems: "center",
+            justifyContent: "center",
             backgroundColor: active ? colors.primary : colors.cardSecondary,
             marginRight: 12,
             borderWidth: 1,
@@ -236,7 +254,7 @@ function SectionButton({
             style={{
               color: colors.text,
               fontSize: 15,
-              fontWeight: '900',
+              fontWeight: "900",
               fontFamily: fontFamily.bold,
             }}
           >
@@ -256,7 +274,7 @@ function SectionButton({
         </View>
 
         <Ionicons
-          name={active ? 'chevron-up' : 'chevron-forward'}
+          name={active ? "chevron-up" : "chevron-forward"}
           size={20}
           color={colors.textMuted}
         />
@@ -277,8 +295,8 @@ function ToggleRow({
   subtitle?: string;
   value: boolean;
   onValueChange: (next: boolean) => void;
-  colors: ReturnType<typeof useAppTheme>['colors'];
-  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'];
+  colors: ReturnType<typeof useAppTheme>["colors"];
+  fontFamily: ReturnType<typeof useAppTheme>["fontFamily"];
 }) {
   return (
     <View
@@ -286,9 +304,9 @@ function ToggleRow({
         minHeight: 72,
         paddingHorizontal: 14,
         paddingVertical: 14,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
       }}
     >
       <View style={{ flex: 1, paddingRight: 12 }}>
@@ -296,7 +314,7 @@ function ToggleRow({
           style={{
             color: colors.text,
             fontSize: 15,
-            fontWeight: '900',
+            fontWeight: "900",
             fontFamily: fontFamily.bold,
           }}
         >
@@ -354,14 +372,17 @@ export default function SettingsScreen() {
   } | null>(null);
 
   const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
-  const [nameInput, setNameInput] = useState('');
+  const [nameInput, setNameInput] = useState("");
   const [savingName, setSavingName] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
 
   const [todoNotifications, setTodoNotifications] = useState(true);
   const [habitNotifications, setHabitNotifications] = useState(true);
   const [eventNotifications, setEventNotifications] = useState(true);
-  const [dailySummaryNotifications, setDailySummaryNotifications] = useState(false);
-  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
+  const [dailySummaryNotifications, setDailySummaryNotifications] =
+    useState(false);
+  const [appSettings, setAppSettings] =
+    useState<AppSettings>(defaultAppSettings);
 
   const styles = makeStyles(colors, fontFamily);
 
@@ -369,11 +390,11 @@ export default function SettingsScreen() {
     return (
       fullName?.trim() ||
       (user?.user_metadata?.full_name as string | undefined) ||
-      'Benutzer'
+      "Benutzer"
     );
   }, [fullName, user]);
 
-  const email = user?.email ?? 'Keine E-Mail gefunden';
+  const email = user?.email ?? "Keine E-Mail gefunden";
 
   async function refreshStorageStats() {
     try {
@@ -417,7 +438,9 @@ export default function SettingsScreen() {
     await saveAppSettings(next);
   }
 
-  async function updateNotificationSettings(patch: Partial<AppSettings['notifications']>) {
+  async function updateNotificationSettings(
+    patch: Partial<AppSettings["notifications"]>,
+  ) {
     await updateAppSettings({
       notifications: {
         ...appSettings.notifications,
@@ -442,20 +465,24 @@ export default function SettingsScreen() {
   }
 
   function openAccountSection() {
-    setOpenSection('account');
+    setOpenSection("account");
   }
 
   async function pickProfileImage() {
     try {
-      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const permission =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
 
       if (!permission.granted) {
-        Alert.alert('Zugriff benötigt', 'Bitte erlaube den Zugriff auf deine Fotos.');
+        Alert.alert(
+          "Zugriff benötigt",
+          "Bitte erlaube den Zugriff auf deine Fotos.",
+        );
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -467,7 +494,7 @@ export default function SettingsScreen() {
       setProfileImageUri(uri);
       await AsyncStorage.setItem(PROFILE_IMAGE_STORAGE_KEY, uri);
     } catch {
-      Alert.alert('Fehler', 'Das Profilbild konnte nicht ausgewählt werden.');
+      Alert.alert("Fehler", "Das Profilbild konnte nicht ausgewählt werden.");
     }
   }
 
@@ -476,7 +503,7 @@ export default function SettingsScreen() {
       setProfileImageUri(null);
       await AsyncStorage.removeItem(PROFILE_IMAGE_STORAGE_KEY);
     } catch {
-      Alert.alert('Fehler', 'Das Profilbild konnte nicht entfernt werden.');
+      Alert.alert("Fehler", "Das Profilbild konnte nicht entfernt werden.");
     }
   }
 
@@ -484,7 +511,7 @@ export default function SettingsScreen() {
     const cleaned = nameInput.trim();
 
     if (!cleaned) {
-      Alert.alert('Hinweis', 'Bitte gib einen Namen ein.');
+      Alert.alert("Hinweis", "Bitte gib einen Namen ein.");
       return;
     }
 
@@ -502,7 +529,7 @@ export default function SettingsScreen() {
       }
 
       if (user?.id) {
-        const { error: profileError } = await supabase.from('profiles').upsert({
+        const { error: profileError } = await supabase.from("profiles").upsert({
           id: user.id,
           full_name: cleaned,
         });
@@ -513,93 +540,102 @@ export default function SettingsScreen() {
       }
 
       await refreshProfile();
-      Alert.alert('Gespeichert', 'Dein Name wurde aktualisiert.');
+      Alert.alert("Gespeichert", "Dein Name wurde aktualisiert.");
     } catch (error: any) {
-      Alert.alert('Fehler', error?.message ?? 'Der Name konnte nicht gespeichert werden.');
+      Alert.alert(
+        "Fehler",
+        error?.message ?? "Der Name konnte nicht gespeichert werden.",
+      );
     } finally {
       setSavingName(false);
     }
   }
 
   function askImportType() {
-    Alert.alert('Import', 'Welches Format möchtest du importieren?', [
-      { text: 'Abbrechen', style: 'cancel' },
-      { text: 'JSON', onPress: () => askImportMode('json') },
-      { text: 'ICS', onPress: () => askImportMode('ics') },
+    Alert.alert("Import", "Welches Format möchtest du importieren?", [
+      { text: "Abbrechen", style: "cancel" },
+      { text: "JSON", onPress: () => askImportMode("json") },
+      { text: "ICS", onPress: () => askImportMode("ics") },
     ]);
   }
 
-  function askImportMode(type: 'json' | 'ics') {
+  function askImportMode(type: "json" | "ics") {
     Alert.alert(
-      'Importmodus',
-      'Möchtest du die neuen Termine anhängen oder die alten vollständig ersetzen?',
+      "Importmodus",
+      "Möchtest du die neuen Termine anhängen oder die alten vollständig ersetzen?",
       [
-        { text: 'Abbrechen', style: 'cancel' },
+        { text: "Abbrechen", style: "cancel" },
         {
-          text: 'Anhängen',
+          text: "Anhängen",
           onPress: async () => {
             try {
               const result =
-                type === 'json'
-                  ? await importCalendarFromJSON('append')
-                  : await importCalendarFromICS('append');
+                type === "json"
+                  ? await importCalendarFromJSON("append")
+                  : await importCalendarFromICS("append");
 
               await refreshStorageStats();
 
               Alert.alert(
-                'Import abgeschlossen',
-                `${result.imported} Termin${result.imported === 1 ? '' : 'e'} importiert.`
+                "Import abgeschlossen",
+                `${result.imported} Termin${result.imported === 1 ? "" : "e"} importiert.`,
               );
             } catch {
-              Alert.alert('Fehler', 'Die Datei konnte nicht importiert werden.');
+              Alert.alert(
+                "Fehler",
+                "Die Datei konnte nicht importiert werden.",
+              );
             }
           },
         },
         {
-          text: 'Ersetzen',
-          style: 'destructive',
+          text: "Ersetzen",
+          style: "destructive",
           onPress: async () => {
             try {
               const result =
-                type === 'json'
-                  ? await importCalendarFromJSON('replace')
-                  : await importCalendarFromICS('replace');
+                type === "json"
+                  ? await importCalendarFromJSON("replace")
+                  : await importCalendarFromICS("replace");
 
               await refreshStorageStats();
 
               Alert.alert(
-                'Import abgeschlossen',
-                `${result.imported} Termin${result.imported === 1 ? '' : 'e'} importiert.`
+                "Import abgeschlossen",
+                `${result.imported} Termin${result.imported === 1 ? "" : "e"} importiert.`,
               );
             } catch {
-              Alert.alert('Fehler', 'Die Datei konnte nicht importiert werden.');
+              Alert.alert(
+                "Fehler",
+                "Die Datei konnte nicht importiert werden.",
+              );
             }
           },
         },
-      ]
+      ],
     );
   }
 
   function askExportType() {
-    Alert.alert('Export', 'Welches Format möchtest du exportieren?', [
-      { text: 'Abbrechen', style: 'cancel' },
+    Alert.alert("Export", "Welches Format möchtest du exportieren?", [
+      { text: "Abbrechen", style: "cancel" },
       {
-        text: 'JSON',
+        text: "JSON",
         onPress: async () => {
           try {
             await exportCalendarAsJSON();
           } catch {
-            Alert.alert('Fehler', 'JSON-Export konnte nicht erstellt werden.');
+            Alert.alert("Fehler", "JSON-Export konnte nicht erstellt werden.");
           }
         },
       },
       {
-        text: 'ICS',
+        text: "ICS",
         onPress: async () => {
           try {
             await exportCalendarAsICS();
           } catch {
-            Alert.alert('Fehler', 'ICS-Export konnte nicht erstellt werden.');
+            Alert.alert("Fehler", "ICS-Export konnte nicht erstellt werden.");
           }
         },
       },
@@ -608,60 +644,118 @@ export default function SettingsScreen() {
 
   function askResetCalendar() {
     Alert.alert(
-      'Kalender zuruecksetzen',
-      'Dadurch werden alle gespeicherten Kalendertermine dieses Kontos geloescht.',
+      "Kalender zuruecksetzen",
+      "Dadurch werden alle gespeicherten Kalendertermine dieses Kontos geloescht.",
       [
-        { text: 'Abbrechen', style: 'cancel' },
+        { text: "Abbrechen", style: "cancel" },
         {
-          text: 'Löschen',
-          style: 'destructive',
+          text: "Löschen",
+          style: "destructive",
           onPress: async () => {
             try {
               await clearCalendarStorage();
               await refreshStorageStats();
-              Alert.alert('Erledigt', 'Alle Kalenderdaten wurden geloescht.');
+              Alert.alert("Erledigt", "Alle Kalenderdaten wurden geloescht.");
             } catch {
-              Alert.alert('Fehler', 'Kalenderdaten konnten nicht gelöscht werden.');
+              Alert.alert(
+                "Fehler",
+                "Kalenderdaten konnten nicht gelöscht werden.",
+              );
             }
           },
         },
-      ]
+      ],
     );
   }
 
   function askDeleteAccount() {
+    if (deletingAccount) return;
+
     Alert.alert(
-      'Account loeschen',
-      'Vor der Veroeffentlichung muss dieser Button direkt mit einer sicheren Kontoloeschung verbunden werden. Bis dahin darf die App nicht live veroeffentlicht werden.',
+      "Account dauerhaft löschen",
+      "Dadurch werden dein Konto und deine gespeicherten Kalendulu-Daten dauerhaft gelöscht. Diese Aktion kann nicht rückgängig gemacht werden.",
       [
-        { text: 'OK', style: 'default' },
-      ]
+        {
+          text: "Abbrechen",
+          style: "cancel",
+        },
+        {
+          text: "Weiter",
+          style: "destructive",
+          onPress: () => {
+            Alert.alert(
+              "Endgültig bestätigen",
+              "Bitte bestätige die endgültige Löschung deines Accounts. Deine Ziele, Todos, Habits, Kalenderdaten, Fortschritte, Reflexionsdaten und lokalen Appdaten werden gelöscht.",
+              [
+                {
+                  text: "Abbrechen",
+                  style: "cancel",
+                },
+                {
+                  text: "Account löschen",
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      setDeletingAccount(true);
+                      await deleteCurrentAccount();
+
+                      Alert.alert(
+                        "Account gelöscht",
+                        "Dein Account und deine gespeicherten Kalendulu-Daten wurden gelöscht.",
+                      );
+
+                      router.replace("/login" as any);
+                    } catch (error: any) {
+                      Alert.alert(
+                        "Fehler",
+                        error?.message ??
+                          "Der Account konnte nicht gelöscht werden.",
+                      );
+                    } finally {
+                      setDeletingAccount(false);
+                    }
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
     );
   }
 
   async function handleLogout() {
     try {
       await signOut();
-      router.replace('/login' as any);
+      router.replace("/login" as any);
     } catch (error: any) {
-      Alert.alert('Fehler', error?.message ?? 'Abmelden fehlgeschlagen.');
+      Alert.alert("Fehler", error?.message ?? "Abmelden fehlgeschlagen.");
     }
   }
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.headerWrap}>
           <Text style={styles.screenTitle}>Einstellungen</Text>
         </View>
 
         <Pressable
           onPress={openAccountSection}
-          style={({ pressed }) => [styles.accountCard, { opacity: pressed ? 0.9 : 1 }]}
+          style={({ pressed }) => [
+            styles.accountCard,
+            { opacity: pressed ? 0.9 : 1 },
+          ]}
         >
           <View style={styles.avatar}>
             {profileImageUri ? (
-              <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
+              <Image
+                source={{ uri: profileImageUri }}
+                style={styles.avatarImage}
+              />
             ) : (
               <Ionicons name="person" size={26} color={colors.primaryText} />
             )}
@@ -682,8 +776,8 @@ export default function SettingsScreen() {
             icon="color-palette-outline"
             colors={colors}
             fontFamily={fontFamily}
-            active={openSection === 'themes'}
-            onPress={() => toggleSection('themes')}
+            active={openSection === "themes"}
+            onPress={() => toggleSection("themes")}
           />
           <View style={styles.separator} />
           <SectionButton
@@ -692,8 +786,8 @@ export default function SettingsScreen() {
             icon="calendar-outline"
             colors={colors}
             fontFamily={fontFamily}
-            active={openSection === 'calendar'}
-            onPress={() => toggleSection('calendar')}
+            active={openSection === "calendar"}
+            onPress={() => toggleSection("calendar")}
           />
           <View style={styles.separator} />
           <SectionButton
@@ -702,8 +796,8 @@ export default function SettingsScreen() {
             icon="person-circle-outline"
             colors={colors}
             fontFamily={fontFamily}
-            active={openSection === 'account'}
-            onPress={() => toggleSection('account')}
+            active={openSection === "account"}
+            onPress={() => toggleSection("account")}
           />
           <View style={styles.separator} />
           <SectionButton
@@ -712,8 +806,8 @@ export default function SettingsScreen() {
             icon="notifications-outline"
             colors={colors}
             fontFamily={fontFamily}
-            active={openSection === 'notifications'}
-            onPress={() => toggleSection('notifications')}
+            active={openSection === "notifications"}
+            onPress={() => toggleSection("notifications")}
           />
           <View style={styles.separator} />
           <SectionButton
@@ -722,31 +816,41 @@ export default function SettingsScreen() {
             icon="information-circle-outline"
             colors={colors}
             fontFamily={fontFamily}
-            active={openSection === 'about'}
-            onPress={() => toggleSection('about')}
+            active={openSection === "about"}
+            onPress={() => toggleSection("about")}
           />
         </View>
 
-        {openSection === 'themes' && (
+        {openSection === "themes" && (
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Theme-Modus</Text>
 
               <View style={styles.rowWrap}>
                 <Pressable
-                  onPress={() => setMode('preset')}
-                  style={[styles.pill, mode === 'preset' && styles.pillActive]}
+                  onPress={() => setMode("preset")}
+                  style={[styles.pill, mode === "preset" && styles.pillActive]}
                 >
-                  <Text style={[styles.pillText, mode === 'preset' && styles.pillTextActive]}>
+                  <Text
+                    style={[
+                      styles.pillText,
+                      mode === "preset" && styles.pillTextActive,
+                    ]}
+                  >
                     Vorgefertigt
                   </Text>
                 </Pressable>
 
                 <Pressable
-                  onPress={() => setMode('custom')}
-                  style={[styles.pill, mode === 'custom' && styles.pillActive]}
+                  onPress={() => setMode("custom")}
+                  style={[styles.pill, mode === "custom" && styles.pillActive]}
                 >
-                  <Text style={[styles.pillText, mode === 'custom' && styles.pillTextActive]}>
+                  <Text
+                    style={[
+                      styles.pillText,
+                      mode === "custom" && styles.pillTextActive,
+                    ]}
+                  >
                     Eigenes Design
                   </Text>
                 </Pressable>
@@ -757,17 +861,23 @@ export default function SettingsScreen() {
               <Text style={styles.detailTitle}>Themes ({presets.length})</Text>
 
               {presets.map((preset) => {
-                const isActive = mode === 'preset' && selectedThemeId === preset.id;
+                const isActive =
+                  mode === "preset" && selectedThemeId === preset.id;
 
                 return (
                   <Pressable
                     key={preset.id}
                     onPress={() => setSelectedThemeId(preset.id)}
-                    style={[styles.themeCard, isActive && styles.themeCardActive]}
+                    style={[
+                      styles.themeCard,
+                      isActive && styles.themeCardActive,
+                    ]}
                   >
                     <View style={styles.themeTop}>
                       <Text style={styles.themeName}>{preset.name}</Text>
-                      <Text style={styles.themeState}>{isActive ? 'Aktiv' : 'Auswählen'}</Text>
+                      <Text style={styles.themeState}>
+                        {isActive ? "Aktiv" : "Auswählen"}
+                      </Text>
                     </View>
 
                     <View style={styles.paletteRow}>
@@ -801,7 +911,12 @@ export default function SettingsScreen() {
                       onPress={() => setFontPreset(item.id as any)}
                       style={[styles.pill, active && styles.pillActive]}
                     >
-                      <Text style={[styles.pillText, active && styles.pillTextActive]}>
+                      <Text
+                        style={[
+                          styles.pillText,
+                          active && styles.pillTextActive,
+                        ]}
+                      >
                         {item.label}
                       </Text>
                     </Pressable>
@@ -822,23 +937,28 @@ export default function SettingsScreen() {
               />
 
               <View style={styles.customActions}>
-                <Pressable onPress={() => setMode('custom')} style={styles.primaryBtn}>
-                  <Text style={styles.primaryBtnText}>Custom Theme aktivieren</Text>
+                <Pressable
+                  onPress={() => setMode("custom")}
+                  style={styles.primaryBtn}
+                >
+                  <Text style={styles.primaryBtnText}>
+                    Custom Theme aktivieren
+                  </Text>
                 </Pressable>
 
                 <Pressable
                   onPress={() => {
                     Alert.alert(
-                      'Custom Theme zurücksetzen',
-                      'Möchtest du dein eigenes Design wirklich zurücksetzen?',
+                      "Custom Theme zurücksetzen",
+                      "Möchtest du dein eigenes Design wirklich zurücksetzen?",
                       [
-                        { text: 'Abbrechen', style: 'cancel' },
+                        { text: "Abbrechen", style: "cancel" },
                         {
-                          text: 'Zurücksetzen',
-                          style: 'destructive',
+                          text: "Zurücksetzen",
+                          style: "destructive",
                           onPress: () => resetCustomTheme(),
                         },
-                      ]
+                      ],
                     );
                   }}
                   style={styles.secondaryBtn}
@@ -862,7 +982,7 @@ export default function SettingsScreen() {
           </>
         )}
 
-        {openSection === 'calendar' && (
+        {openSection === "calendar" && (
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Kalender</Text>
@@ -898,7 +1018,11 @@ export default function SettingsScreen() {
                 <SettingsEntry
                   title="Feiertagsland"
                   subtitle="Bestimmt, welche Feiertage im Kalender markiert werden"
-                  value={HOLIDAY_COUNTRIES.find((item) => item.code === appSettings.holidayCountry)?.label}
+                  value={
+                    HOLIDAY_COUNTRIES.find(
+                      (item) => item.code === appSettings.holidayCountry,
+                    )?.label
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -908,10 +1032,17 @@ export default function SettingsScreen() {
                     return (
                       <Pressable
                         key={country.code}
-                        onPress={() => updateAppSettings({ holidayCountry: country.code })}
+                        onPress={() =>
+                          updateAppSettings({ holidayCountry: country.code })
+                        }
                         style={[styles.chip, active && styles.chipActive]}
                       >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                        <Text
+                          style={[
+                            styles.chipText,
+                            active && styles.chipTextActive,
+                          ]}
+                        >
                           {country.label}
                         </Text>
                       </Pressable>
@@ -924,7 +1055,9 @@ export default function SettingsScreen() {
                   title="Feiertage anzeigen"
                   subtitle="Laenderspezifische Feiertage im Kalender markieren"
                   value={appSettings.showHolidays}
-                  onValueChange={(value) => updateAppSettings({ showHolidays: value })}
+                  onValueChange={(value) =>
+                    updateAppSettings({ showHolidays: value })
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -934,7 +1067,9 @@ export default function SettingsScreen() {
                   title="Sonntage markieren"
                   subtitle="Sonntage optisch hervorheben"
                   value={appSettings.showSundays}
-                  onValueChange={(value) => updateAppSettings({ showSundays: value })}
+                  onValueChange={(value) =>
+                    updateAppSettings({ showSundays: value })
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -961,32 +1096,52 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Weitere Kalendereinstellungen</Text>
-              <Text style={styles.infoText}>• Standarddauer neuer Termine: 30 / 60 / 90 Minuten</Text>
-              <Text style={styles.infoText}>• Wochenstart: Montag oder Sonntag</Text>
+              <Text style={styles.detailTitle}>
+                Weitere Kalendereinstellungen
+              </Text>
+              <Text style={styles.infoText}>
+                • Standarddauer neuer Termine: 30 / 60 / 90 Minuten
+              </Text>
+              <Text style={styles.infoText}>
+                • Wochenstart: Montag oder Sonntag
+              </Text>
               <Text style={styles.infoText}>• Wiederholende Termine</Text>
-              <Text style={styles.infoText}>• Standard-Erinnerungen vor Terminen</Text>
+              <Text style={styles.infoText}>
+                • Standard-Erinnerungen vor Terminen
+              </Text>
               <Text style={styles.infoText}>• Ganztägige Termine</Text>
               <Text style={styles.infoText}>• Zeitzone / Reisen</Text>
-              <Text style={styles.infoText}>• Standardansicht: Tag / Woche / Monat</Text>
+              <Text style={styles.infoText}>
+                • Standardansicht: Tag / Woche / Monat
+              </Text>
               <Text style={styles.infoText}>• Feiertage anzeigen</Text>
               <Text style={styles.infoText}>• Sonntage farblich markieren</Text>
             </View>
           </>
         )}
 
-        {openSection === 'account' && (
+        {openSection === "account" && (
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Profil</Text>
 
               <View style={styles.profileImageRow}>
-                <Pressable onPress={pickProfileImage} style={styles.profileImageButton}>
+                <Pressable
+                  onPress={pickProfileImage}
+                  style={styles.profileImageButton}
+                >
                   <View style={styles.largeAvatar}>
                     {profileImageUri ? (
-                      <Image source={{ uri: profileImageUri }} style={styles.largeAvatarImage} />
+                      <Image
+                        source={{ uri: profileImageUri }}
+                        style={styles.largeAvatarImage}
+                      />
                     ) : (
-                      <Ionicons name="camera-outline" size={28} color={colors.primaryText} />
+                      <Ionicons
+                        name="camera-outline"
+                        size={28}
+                        color={colors.primaryText}
+                      />
                     )}
                   </View>
                 </Pressable>
@@ -998,18 +1153,30 @@ export default function SettingsScreen() {
                   </Text>
 
                   <View style={styles.profileActionRow}>
-                    <Pressable onPress={pickProfileImage} style={styles.smallPrimaryBtn}>
-                      <Text style={styles.smallPrimaryBtnText}>Bild wählen</Text>
+                    <Pressable
+                      onPress={pickProfileImage}
+                      style={styles.smallPrimaryBtn}
+                    >
+                      <Text style={styles.smallPrimaryBtnText}>
+                        Bild wählen
+                      </Text>
                     </Pressable>
 
-                    <Pressable onPress={removeProfileImage} style={styles.smallSecondaryBtn}>
-                      <Text style={styles.smallSecondaryBtnText}>Entfernen</Text>
+                    <Pressable
+                      onPress={removeProfileImage}
+                      style={styles.smallSecondaryBtn}
+                    >
+                      <Text style={styles.smallSecondaryBtnText}>
+                        Entfernen
+                      </Text>
                     </Pressable>
                   </View>
                 </View>
               </View>
 
-              <Text style={[styles.detailTitle, { marginTop: 18 }]}>Name ändern</Text>
+              <Text style={[styles.detailTitle, { marginTop: 18 }]}>
+                Name ändern
+              </Text>
 
               <TextInput
                 value={nameInput}
@@ -1021,7 +1188,7 @@ export default function SettingsScreen() {
 
               <Pressable onPress={saveDisplayName} style={styles.primaryBtn}>
                 <Text style={styles.primaryBtnText}>
-                  {savingName ? 'Speichern...' : 'Name speichern'}
+                  {savingName ? "Speichern..." : "Name speichern"}
                 </Text>
               </Pressable>
             </View>
@@ -1064,7 +1231,10 @@ export default function SettingsScreen() {
                 <Text style={styles.logoutText}>Abmelden</Text>
               </Pressable>
 
-              <Pressable onPress={askDeleteAccount} style={styles.deleteAccountButton}>
+              <Pressable
+                onPress={askDeleteAccount}
+                style={styles.deleteAccountButton}
+              >
                 <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
                 <Text style={styles.logoutText}>Account loeschen</Text>
               </Pressable>
@@ -1072,7 +1242,7 @@ export default function SettingsScreen() {
           </>
         )}
 
-        {openSection === 'notifications' && (
+        {openSection === "notifications" && (
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Benachrichtigungen</Text>
@@ -1082,28 +1252,40 @@ export default function SettingsScreen() {
                   title="Todo-Erinnerungen"
                   subtitle="Benachrichtigungen für offene Aufgaben"
                   value={todoNotifications}
-                  onValueChange={(value) => updateNotificationSettings({ todosEnabled: value })}
+                  onValueChange={(value) =>
+                    updateNotificationSettings({ todosEnabled: value })
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
                 <View style={styles.chipWrap}>
-                  {([
-                    ['smart', 'Smart'],
-                    ['same_day', 'Selber Tag'],
-                    ['next_morning', 'Naechster Morgen'],
-                    ['off', 'Aus'],
-                  ] as [TodoReminderMode, string][]).map(([modeId, label]) => {
-                    const active = appSettings.notifications.todoMode === modeId;
+                  {(
+                    [
+                      ["smart", "Smart"],
+                      ["same_day", "Selber Tag"],
+                      ["next_morning", "Naechster Morgen"],
+                      ["off", "Aus"],
+                    ] as [TodoReminderMode, string][]
+                  ).map(([modeId, label]) => {
+                    const active =
+                      appSettings.notifications.todoMode === modeId;
                     return (
                       <Pressable
                         key={modeId}
-                        onPress={() => updateNotificationSettings({
-                          todoMode: modeId,
-                          todosEnabled: modeId !== 'off',
-                        })}
+                        onPress={() =>
+                          updateNotificationSettings({
+                            todoMode: modeId,
+                            todosEnabled: modeId !== "off",
+                          })
+                        }
                         style={[styles.chip, active && styles.chipActive]}
                       >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                        <Text
+                          style={[
+                            styles.chipText,
+                            active && styles.chipTextActive,
+                          ]}
+                        >
                           {label}
                         </Text>
                       </Pressable>
@@ -1126,30 +1308,42 @@ export default function SettingsScreen() {
                   title="Termin-Erinnerungen"
                   subtitle="Hinweise vor Kalenderterminen"
                   value={eventNotifications}
-                  onValueChange={(value) => updateNotificationSettings({ eventsEnabled: value })}
+                  onValueChange={(value) =>
+                    updateNotificationSettings({ eventsEnabled: value })
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
                 <View style={styles.chipWrap}>
-                  {([
-                    ['at_time', 'Startzeit'],
-                    ['5m', '5 Min'],
-                    ['15m', '15 Min'],
-                    ['30m', '30 Min'],
-                    ['1h', '1 Std'],
-                    ['1d', '1 Tag'],
-                  ] as [NotificationLeadTime, string][]).map(([leadTime, label]) => {
-                    const active = appSettings.notifications.eventLeadTime === leadTime;
+                  {(
+                    [
+                      ["at_time", "Startzeit"],
+                      ["5m", "5 Min"],
+                      ["15m", "15 Min"],
+                      ["30m", "30 Min"],
+                      ["1h", "1 Std"],
+                      ["1d", "1 Tag"],
+                    ] as [NotificationLeadTime, string][]
+                  ).map(([leadTime, label]) => {
+                    const active =
+                      appSettings.notifications.eventLeadTime === leadTime;
                     return (
                       <Pressable
                         key={leadTime}
-                        onPress={() => updateNotificationSettings({
-                          eventLeadTime: leadTime,
-                          eventsEnabled: true,
-                        })}
+                        onPress={() =>
+                          updateNotificationSettings({
+                            eventLeadTime: leadTime,
+                            eventsEnabled: true,
+                          })
+                        }
                         style={[styles.chip, active && styles.chipActive]}
                       >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                        <Text
+                          style={[
+                            styles.chipText,
+                            active && styles.chipTextActive,
+                          ]}
+                        >
                           {label}
                         </Text>
                       </Pressable>
@@ -1162,7 +1356,9 @@ export default function SettingsScreen() {
                   title="Tägliche Zusammenfassung"
                   subtitle="Ein kompakter Überblick über deinen Tag"
                   value={dailySummaryNotifications}
-                  onValueChange={(value) => updateNotificationSettings({ dailySummaryEnabled: value })}
+                  onValueChange={(value) =>
+                    updateNotificationSettings({ dailySummaryEnabled: value })
+                  }
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -1171,36 +1367,117 @@ export default function SettingsScreen() {
 
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Aktive Logik</Text>
-              <Text style={styles.infoText}>• Todos: {appSettings.notifications.todoMode}</Text>
-              <Text style={styles.infoText}>• Termine: {appSettings.notifications.eventLeadTime} vorher</Text>
-              <Text style={styles.infoText}>• Tagesübersicht: {appSettings.notifications.dailySummaryEnabled ? appSettings.notifications.dailySummaryTime : 'aus'}</Text>
-              <Text style={styles.infoText}>• Benachrichtigungen werden nur geplant, wenn die System-Berechtigung erteilt ist.</Text>
+              <Text style={styles.infoText}>
+                • Todos: {appSettings.notifications.todoMode}
+              </Text>
+              <Text style={styles.infoText}>
+                • Termine: {appSettings.notifications.eventLeadTime} vorher
+              </Text>
+              <Text style={styles.infoText}>
+                • Tagesübersicht:{" "}
+                {appSettings.notifications.dailySummaryEnabled
+                  ? appSettings.notifications.dailySummaryTime
+                  : "aus"}
+              </Text>
+              <Text style={styles.infoText}>
+                • Benachrichtigungen werden nur geplant, wenn die
+                System-Berechtigung erteilt ist.
+              </Text>
             </View>
           </>
         )}
 
-        {openSection === 'about' && (
+        {openSection === "about" && (
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Info</Text>
+
               <Text style={styles.infoText}>• App: Kalendulu</Text>
               <Text style={styles.infoText}>• Version: 1.0.0</Text>
-              <Text style={styles.infoText}>• Konto: Ziele, Todos, Habits, Termine und Einstellungen werden deinem Konto zugeordnet.</Text>
-              <Text style={styles.infoText}>• Synchronisierung: Deine App-Daten koennen nach dem Login auf mehreren Geraeten geladen werden.</Text>
-              <Text style={styles.infoText}>• KI: Zieltexte und Antworten koennen verarbeitet werden, um Fragen und Plaene zu erstellen.</Text>
-              <Text style={styles.infoText}>• Werbung: Vor KI-Erstellungen kann eine Rewarded Ad angezeigt werden.</Text>
-              <Text style={styles.infoText}>• Kalender: JSON/ICS Import und Export, Laender-Feiertage und farbige Termine.</Text>
-              <Text style={styles.infoText}>• Profil: Name, E-Mail und Profilbild sind im Konto verwaltbar.</Text>
-              <Text style={styles.infoText}>• Feedback: Deine Step-Feedbacks helfen, kuenftige Plaene besser anzupassen.</Text>
+              <Text style={styles.infoText}>
+                • Konto: Ziele, Todos, Habits, Termine und Einstellungen werden
+                deinem Konto zugeordnet.
+              </Text>
+              <Text style={styles.infoText}>
+                • Synchronisierung: Deine App-Daten koennen nach dem Login auf
+                mehreren Geraeten geladen werden.
+              </Text>
+              <Text style={styles.infoText}>
+                • KI: Zieltexte und Antworten koennen verarbeitet werden, um
+                Fragen und Plaene zu erstellen.
+              </Text>
+              <Text style={styles.infoText}>
+                • Werbung: Vor KI-Erstellungen kann eine Rewarded Ad angezeigt
+                werden.
+              </Text>
+              <Text style={styles.infoText}>
+                • Kalender: JSON/ICS Import und Export, Laender-Feiertage und
+                farbige Termine.
+              </Text>
+              <Text style={styles.infoText}>
+                • Profil: Name, E-Mail und Profilbild sind im Konto verwaltbar.
+              </Text>
+              <Text style={styles.infoText}>
+                • Feedback: Deine Step-Feedbacks helfen, kuenftige Plaene besser
+                anzupassen.
+              </Text>
+              <View style={styles.settingsList}>
+                <SettingsEntry
+                  title="Datenschutz"
+                  subtitle="Welche Daten Kalendulu verarbeitet"
+                  onPress={() => router.push("/legal/privacy" as any)}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+                <SettingsEntry
+                  title="Impressum"
+                  subtitle="Betreiber- und Kontaktangaben"
+                  onPress={() => router.push("/legal/imprint" as any)}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+                <SettingsEntry
+                  title="Support / Kontakt"
+                  subtitle="Hilfe, Kontakt und Datenanfragen"
+                  onPress={() => router.push("/legal/support" as any)}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+                <SettingsEntry
+                  title="Account- und Datenlöschung"
+                  subtitle="Informationen zur dauerhaften Löschung"
+                  onPress={() => router.push("/delete-account" as any)}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+              </View>
             </View>
 
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Rechtliches</Text>
-              <Text style={styles.infoText}>• Datenschutz: Vor dem Store-Launch muss eine echte Datenschutzerklaerung mit Betreiberangaben verlinkt werden.</Text>
-              <Text style={styles.infoText}>• Impressum: Fuer oeffentliche Nutzung muessen Anbieter, Kontakt und verantwortliche Person sichtbar sein.</Text>
-              <Text style={styles.infoText}>• Account-Loeschung: Nutzer muessen ihr Konto und ihre Daten vollstaendig loeschen koennen.</Text>
-              <Text style={styles.infoText}>• KI-Hinweis: Plaene koennen Fehler enthalten und ersetzen keine medizinische, rechtliche oder finanzielle Beratung.</Text>
-              <Text style={styles.infoText}>• Push: Benachrichtigungen werden nur nach deiner Berechtigung verwendet.</Text>
+              <Text style={styles.infoText}>
+                • Datenschutz: Vor dem Store-Launch muss eine echte
+                Datenschutzerklaerung mit Betreiberangaben verlinkt werden.
+              </Text>
+              <Text style={styles.infoText}>
+                • Impressum: Fuer oeffentliche Nutzung muessen Anbieter, Kontakt
+                und verantwortliche Person sichtbar sein.
+              </Text>
+              <Text style={styles.infoText}>
+                • Account-Loeschung: Nutzer muessen ihr Konto und ihre Daten
+                vollstaendig loeschen koennen.
+              </Text>
+              <Text style={styles.infoText}>
+                • KI-Hinweis: Plaene koennen Fehler enthalten und ersetzen keine
+                medizinische, rechtliche oder finanzielle Beratung.
+              </Text>
+              <Text style={styles.infoText}>
+                • Push: Benachrichtigungen werden nur nach deiner Berechtigung
+                verwendet.
+              </Text>
             </View>
           </>
         )}
@@ -1210,8 +1487,8 @@ export default function SettingsScreen() {
 }
 
 function makeStyles(
-  colors: ReturnType<typeof useAppTheme>['colors'],
-  fontFamily: ReturnType<typeof useAppTheme>['fontFamily']
+  colors: ReturnType<typeof useAppTheme>["colors"],
+  fontFamily: ReturnType<typeof useAppTheme>["fontFamily"],
 ) {
   return StyleSheet.create({
     safe: {
@@ -1231,7 +1508,7 @@ function makeStyles(
     screenTitle: {
       color: colors.text,
       fontSize: 34,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
       letterSpacing: -0.6,
     },
@@ -1242,27 +1519,27 @@ function makeStyles(
       borderColor: colors.border,
       paddingHorizontal: 16,
       paddingVertical: 16,
-      flexDirection: 'row',
-      alignItems: 'center',
+      flexDirection: "row",
+      alignItems: "center",
       gap: 14,
     },
     avatar: {
       width: 56,
       height: 56,
       borderRadius: 18,
-      alignItems: 'center',
-      justifyContent: 'center',
+      alignItems: "center",
+      justifyContent: "center",
       backgroundColor: colors.primary,
-      overflow: 'hidden',
+      overflow: "hidden",
     },
     avatarImage: {
-      width: '100%',
-      height: '100%',
+      width: "100%",
+      height: "100%",
     },
     accountName: {
       color: colors.text,
       fontSize: 20,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     accountSub: {
@@ -1276,7 +1553,7 @@ function makeStyles(
       borderRadius: 26,
       borderWidth: 1,
       borderColor: colors.border,
-      overflow: 'hidden',
+      overflow: "hidden",
     },
     detailCard: {
       backgroundColor: colors.card,
@@ -1288,7 +1565,7 @@ function makeStyles(
     detailTitle: {
       color: colors.text,
       fontSize: 18,
-      fontWeight: '900',
+      fontWeight: "900",
       marginBottom: 12,
       fontFamily: fontFamily.bold,
     },
@@ -1305,8 +1582,8 @@ function makeStyles(
       marginLeft: 14,
     },
     rowWrap: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
+      flexDirection: "row",
+      flexWrap: "wrap",
       gap: 10,
     },
     pill: {
@@ -1323,7 +1600,7 @@ function makeStyles(
     },
     pillText: {
       color: colors.text,
-      fontWeight: '800',
+      fontWeight: "800",
       fontFamily: fontFamily.bold,
     },
     pillTextActive: {
@@ -1342,24 +1619,24 @@ function makeStyles(
       borderWidth: 2,
     },
     themeTop: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
       marginBottom: 12,
     },
     themeName: {
       color: colors.text,
       fontSize: 15,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     themeState: {
       color: colors.textMuted,
-      fontWeight: '700',
+      fontWeight: "700",
       fontFamily: fontFamily.regular,
     },
     paletteRow: {
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: 10,
     },
     swatch: {
@@ -1382,7 +1659,7 @@ function makeStyles(
       fontFamily: fontFamily.regular,
     },
     customActions: {
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: 10,
       marginBottom: 12,
     },
@@ -1391,11 +1668,11 @@ function makeStyles(
       borderRadius: 14,
       backgroundColor: colors.primary,
       paddingVertical: 14,
-      alignItems: 'center',
+      alignItems: "center",
     },
     primaryBtnText: {
       color: colors.primaryText,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     secondaryBtn: {
@@ -1403,25 +1680,25 @@ function makeStyles(
       borderRadius: 14,
       backgroundColor: colors.cardSecondary,
       paddingVertical: 14,
-      alignItems: 'center',
+      alignItems: "center",
       borderWidth: 1,
       borderColor: colors.border,
     },
     secondaryBtnText: {
       color: colors.text,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     settingsList: {
       backgroundColor: colors.cardSecondary,
       borderRadius: 18,
-      overflow: 'hidden',
+      overflow: "hidden",
       borderWidth: 1,
       borderColor: colors.border,
     },
     chipWrap: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
+      flexDirection: "row",
+      flexWrap: "wrap",
       gap: 8,
       paddingHorizontal: 12,
       paddingVertical: 12,
@@ -1430,8 +1707,8 @@ function makeStyles(
       minHeight: 34,
       borderRadius: 999,
       paddingHorizontal: 12,
-      alignItems: 'center',
-      justifyContent: 'center',
+      alignItems: "center",
+      justifyContent: "center",
       backgroundColor: colors.card,
       borderWidth: 1,
       borderColor: colors.border,
@@ -1443,7 +1720,7 @@ function makeStyles(
     chipText: {
       color: colors.text,
       fontSize: 12,
-      fontWeight: '800',
+      fontWeight: "800",
       fontFamily: fontFamily.bold,
     },
     chipTextActive: {
@@ -1459,31 +1736,31 @@ function makeStyles(
       minHeight: 54,
       borderRadius: 16,
       backgroundColor: colors.danger,
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexDirection: 'row',
+      alignItems: "center",
+      justifyContent: "center",
+      flexDirection: "row",
       gap: 8,
       marginBottom: 12,
     },
     deleteAccountButton: {
       minHeight: 54,
       borderRadius: 16,
-      backgroundColor: '#7F1D1D',
-      alignItems: 'center',
-      justifyContent: 'center',
-      flexDirection: 'row',
+      backgroundColor: "#7F1D1D",
+      alignItems: "center",
+      justifyContent: "center",
+      flexDirection: "row",
       gap: 8,
     },
     logoutText: {
-      color: '#FFFFFF',
+      color: "#FFFFFF",
       fontSize: 16,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     profileImageRow: {
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: 14,
-      alignItems: 'center',
+      alignItems: "center",
     },
     profileImageButton: {
       borderRadius: 999,
@@ -1493,18 +1770,18 @@ function makeStyles(
       height: 84,
       borderRadius: 999,
       backgroundColor: colors.primary,
-      alignItems: 'center',
-      justifyContent: 'center',
-      overflow: 'hidden',
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden",
     },
     largeAvatarImage: {
-      width: '100%',
-      height: '100%',
+      width: "100%",
+      height: "100%",
     },
     profileLabel: {
       color: colors.text,
       fontSize: 16,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     profileSubLabel: {
@@ -1514,7 +1791,7 @@ function makeStyles(
       fontFamily: fontFamily.regular,
     },
     profileActionRow: {
-      flexDirection: 'row',
+      flexDirection: "row",
       gap: 10,
       marginTop: 12,
     },
@@ -1526,7 +1803,7 @@ function makeStyles(
     },
     smallPrimaryBtnText: {
       color: colors.primaryText,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
     smallSecondaryBtn: {
@@ -1539,7 +1816,7 @@ function makeStyles(
     },
     smallSecondaryBtnText: {
       color: colors.text,
-      fontWeight: '900',
+      fontWeight: "900",
       fontFamily: fontFamily.bold,
     },
   });
