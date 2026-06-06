@@ -45,7 +45,9 @@ import { buildFreeSlots } from './buildFreeSlots';
 import { buildUserPlanningProfile } from './buildUserPlanningProfile';
 import { fetchGoalRefinement } from './refinementApi';
 import { fetchPlannerBundle } from './plannerApi';
+import { requireAiAds } from '../monetization/aiAdGate';
 import { useAppTheme } from '../theme/ThemeProvider';
+import { getUserGoalLearningProfile } from '../ai/adaptiveGoal';
 
 dayjs.locale('de');
 
@@ -68,11 +70,11 @@ function curvedCount(level: number, min: number, max: number) {
 }
 
 function questionCountForDifficulty(level: number) {
-  return curvedCount(level, 5, 40);
+  return curvedCount(level, 4, 16);
 }
 
 function stepCountForDifficulty(level: number) {
-  return curvedCount(level, 10, 50);
+  return curvedCount(level, 5, 14);
 }
 
 function uid(prefix: string) {
@@ -137,10 +139,6 @@ function isoToDayLabel(iso: string) {
 
 function isoToTimeLabel(iso: string) {
   return dayjs(iso).format('HH:mm');
-}
-
-function durationMinutes(start: string, end: string) {
-  return Math.max(dayjs(end).diff(dayjs(start), 'minute'), 0);
 }
 
 function dedupeByTitle<T extends { title: string }>(items: T[]) {
@@ -1158,6 +1156,11 @@ export default function PsycheScreen() {
     setBusy('refining');
 
     try {
+      await requireAiAds({
+        phase: 'goal_refinement',
+        difficultyLevel,
+      });
+
       const context = await buildContext();
 
       const refinement = await fetchGoalRefinement({
@@ -1234,7 +1237,13 @@ export default function PsycheScreen() {
     setBusy('planning');
 
     try {
+      await requireAiAds({
+        phase: 'planner_bundle',
+        difficultyLevel,
+      });
+
       const context = await buildContext();
+      const goalLearningProfile = await getUserGoalLearningProfile();
 
       const bundle = await fetchPlannerBundle({
         goal: goalTitle.trim(),
@@ -1246,6 +1255,7 @@ export default function PsycheScreen() {
         freeSlots: context.freeSlots,
         answers,
         userPlanningProfile: context.planningProfile,
+        goalLearningProfile,
       });
 
       const category = ((questionMeta?.category as GoalCategory) ?? 'other');
@@ -1318,7 +1328,7 @@ export default function PsycheScreen() {
     setBusy('applying');
 
     try {
-      await applyFullGoalPlan({
+      const result = await applyFullGoalPlan({
         todos: goal.executionPlan.todos ?? [],
         habits: goal.executionPlan.habits ?? [],
         calendarBlocks: goal.executionPlan.calendarBlocks ?? [],
@@ -1330,7 +1340,10 @@ export default function PsycheScreen() {
       setGoals(nextGoals);
       await savePsycheGoals(nextGoals);
 
-      Alert.alert('Übernommen', 'Todos, Habits und Kalenderblöcke wurden in deine App übernommen.');
+      Alert.alert(
+        'Übernommen',
+        `${result.todosAdded} Todos, ${result.habitsAdded} Habits und ${result.calendarAdded} Kalenderblöcke wurden eingefügt.`,
+      );
     } catch (error: any) {
       Alert.alert('Fehler', error?.message ?? 'Der Plan konnte nicht in die App übernommen werden.');
     } finally {
@@ -1344,12 +1357,53 @@ export default function PsycheScreen() {
     setBusy('applying');
 
     try {
-      await applyFullGoalPlan({
+      const result = await applyFullGoalPlan({
         todos: previewPlan.todos ?? [],
         habits: previewPlan.habits ?? [],
         calendarBlocks: previewPlan.calendarBlocks ?? [],
       });
-      Alert.alert('Übernommen', 'Die Plan-Vorschläge wurden direkt in deine App übernommen.');
+
+      const steps = previewPlan.steps ?? [];
+      const progressPercent = computeProgressPercent(steps);
+      const goal: PsycheGoal = {
+        id: uid('goal'),
+        title: goalTitle.trim(),
+        category: (questionMeta?.category as GoalCategory) ?? 'other',
+        difficultyLevel,
+        targetDate,
+        createdAt: new Date().toISOString(),
+        why: answerToString(answers.why || answers.reason || answers.motivation),
+        answers,
+        questionCount: questionSet.length,
+        refinement: {
+          goalLabel: goalTitle.trim(),
+          goalType: ((questionMeta?.category as GoalCategory) ?? 'other'),
+          questions: questionSet,
+        },
+        recommendation: {
+          summary:
+            previewPlan.summary ??
+            'Ein konkreter Plan mit Schritten, Gewohnheiten und Zeitblöcken wurde erstellt.',
+        },
+        miniSteps: mapChecklistToMiniSteps(steps),
+        executionPlan: previewPlan,
+        progressPercent,
+        appliedToApp: true,
+      };
+
+      const nextGoals = [goal, ...goals];
+      setGoals(nextGoals);
+      await savePsycheGoals(nextGoals);
+
+      setGoalTitle('');
+      setTargetDate(dayjs().add(90, 'day').format('YYYY-MM-DD'));
+      setDifficultyLevel(5);
+      resetBuilderState();
+
+      Alert.alert(
+        'Übernommen',
+        `${result.todosAdded} Todos, ${result.habitsAdded} Habits und ${result.calendarAdded} Kalenderblöcke wurden eingefügt. Das Ziel wurde gespeichert.`,
+      );
     } catch (error: any) {
       Alert.alert('Fehler', error?.message ?? 'Die Vorschläge konnten nicht übernommen werden.');
     } finally {
@@ -1380,8 +1434,8 @@ export default function PsycheScreen() {
           <Text style={styles.kicker}>Psyche AI Planner</Text>
           <Text style={styles.title}>Ziele zuerst sauber diagnostizieren.</Text>
           <Text style={styles.subtitle}>
-            Schwierigkeit bestimmt die Tiefe der Analyse. Bei 1 gibt es wenige Fragen, bei 10 eine
-            fast vollständige Ziel-Zerlegung mit bis zu 40 Fragen und bis zu 50 Schritten.
+            Die KI erzeugt kluge Diagnosefragen, erkennt Engpässe und baut daraus konkrete
+            Handlungsschritte. Bei 1 bleibt es leicht, bei 10 wird das Ziel tief zerlegt.
           </Text>
 
           <View style={styles.heroStats}>
@@ -1466,7 +1520,7 @@ export default function PsycheScreen() {
         {mode === 'questions' && !!currentQuestion && (
           <View style={styles.card}>
             <View style={styles.rowBetween}>
-              <Text style={styles.cardTitle}>Diagnose-Flow</Text>
+              <Text style={styles.cardTitle}>KI-Diagnosefragen</Text>
               <Text style={styles.stepCounter}>
                 {questionIndex + 1}/{questionSet.length}
               </Text>
@@ -1474,7 +1528,7 @@ export default function PsycheScreen() {
 
             <Text style={styles.smallMuted}>
               {questionMeta?.summary ??
-                `${questionSet.length} Fragen für ein realistisches, umsetzbares Zielsystem.`}
+                `${questionSet.length} KI-Fragen, um Engpässe, Messpunkte und nächste Aktionen zu erkennen.`}
             </Text>
 
             <View style={styles.progressMetaWrap}>
@@ -1542,7 +1596,8 @@ export default function PsycheScreen() {
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Plan-Vorschau</Text>
             <Text style={styles.smallMuted}>
-              Erst prüfen, dann speichern oder direkt in die App übernehmen.
+              Erst prüfen, dann speichern oder direkt übernehmen. Jeder Schritt soll als konkrete
+              Handlung prüfbar sein.
             </Text>
 
             <View style={styles.previewBlock}>

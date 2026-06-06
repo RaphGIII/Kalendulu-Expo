@@ -28,6 +28,15 @@ import {
   importCalendarFromICS,
   importCalendarFromJSON,
 } from '@/src/calendar/calendarImportExport';
+import {
+  defaultAppSettings,
+  HOLIDAY_COUNTRIES,
+  loadAppSettings,
+  saveAppSettings,
+  type AppSettings,
+  type NotificationLeadTime,
+  type TodoReminderMode,
+} from '@/src/settings/appSettings';
 
 const PROFILE_IMAGE_STORAGE_KEY = 'kalendulu:profile-image-uri:v1';
 
@@ -332,7 +341,7 @@ export default function SettingsScreen() {
     fontFamily,
   } = useAppTheme();
 
-  const { fullName, user, signOut } = useAuth();
+  const { fullName, user, signOut, refreshProfile } = useAuth();
   const router = useRouter();
 
   const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
@@ -352,6 +361,7 @@ export default function SettingsScreen() {
   const [habitNotifications, setHabitNotifications] = useState(true);
   const [eventNotifications, setEventNotifications] = useState(true);
   const [dailySummaryNotifications, setDailySummaryNotifications] = useState(false);
+  const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
 
   const styles = makeStyles(colors, fontFamily);
 
@@ -381,6 +391,40 @@ export default function SettingsScreen() {
   useEffect(() => {
     void refreshStorageStats();
   }, []);
+
+  useEffect(() => {
+    void loadAppSettings().then((settings) => {
+      setAppSettings(settings);
+      setTodoNotifications(settings.notifications.todosEnabled);
+      setEventNotifications(settings.notifications.eventsEnabled);
+      setDailySummaryNotifications(settings.notifications.dailySummaryEnabled);
+    });
+  }, []);
+
+  async function updateAppSettings(patch: Partial<AppSettings>) {
+    const next: AppSettings = {
+      ...appSettings,
+      ...patch,
+      notifications: {
+        ...appSettings.notifications,
+        ...(patch.notifications ?? {}),
+      },
+    };
+    setAppSettings(next);
+    setTodoNotifications(next.notifications.todosEnabled);
+    setEventNotifications(next.notifications.eventsEnabled);
+    setDailySummaryNotifications(next.notifications.dailySummaryEnabled);
+    await saveAppSettings(next);
+  }
+
+  async function updateNotificationSettings(patch: Partial<AppSettings['notifications']>) {
+    await updateAppSettings({
+      notifications: {
+        ...appSettings.notifications,
+        ...patch,
+      },
+    });
+  }
 
   useEffect(() => {
     const loadProfileImage = async () => {
@@ -457,6 +501,18 @@ export default function SettingsScreen() {
         throw error;
       }
 
+      if (user?.id) {
+        const { error: profileError } = await supabase.from('profiles').upsert({
+          id: user.id,
+          full_name: cleaned,
+        });
+
+        if (profileError) {
+          throw profileError;
+        }
+      }
+
+      await refreshProfile();
       Alert.alert('Gespeichert', 'Dein Name wurde aktualisiert.');
     } catch (error: any) {
       Alert.alert('Fehler', error?.message ?? 'Der Name konnte nicht gespeichert werden.');
@@ -552,8 +608,8 @@ export default function SettingsScreen() {
 
   function askResetCalendar() {
     Alert.alert(
-      'Kalender zurücksetzen',
-      'Dadurch werden alle lokal gespeicherten Kalendertermine gelöscht.',
+      'Kalender zuruecksetzen',
+      'Dadurch werden alle gespeicherten Kalendertermine dieses Kontos geloescht.',
       [
         { text: 'Abbrechen', style: 'cancel' },
         {
@@ -563,7 +619,7 @@ export default function SettingsScreen() {
             try {
               await clearCalendarStorage();
               await refreshStorageStats();
-              Alert.alert('Erledigt', 'Alle lokalen Kalenderdaten wurden gelöscht.');
+              Alert.alert('Erledigt', 'Alle Kalenderdaten wurden geloescht.');
             } catch {
               Alert.alert('Fehler', 'Kalenderdaten konnten nicht gelöscht werden.');
             }
@@ -575,8 +631,8 @@ export default function SettingsScreen() {
 
   function askDeleteAccount() {
     Alert.alert(
-      'Account löschen',
-      'Dieser Button ist jetzt in der App ergänzt. Für die echte Löschung des Supabase-Auth-Users brauchen wir im nächsten Schritt noch eine sichere Edge Function oder Server-Funktion.',
+      'Account loeschen',
+      'Vor der Veroeffentlichung muss dieser Button direkt mit einer sicheren Kontoloeschung verbunden werden. Bis dahin darf die App nicht live veroeffentlicht werden.',
       [
         { text: 'OK', style: 'default' },
       ]
@@ -632,7 +688,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Kalender"
-            subtitle="Import, Export, Anzeige und lokale Daten"
+            subtitle="Import, Export, Anzeige und gespeicherte Termine"
             icon="calendar-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -662,7 +718,7 @@ export default function SettingsScreen() {
           <View style={styles.separator} />
           <SectionButton
             title="Info"
-            subtitle="App, Sync, Backup, Datenschutz und Version"
+            subtitle="App, Daten, KI, Datenschutz und Version"
             icon="information-circle-outline"
             colors={colors}
             fontFamily={fontFamily}
@@ -832,8 +888,53 @@ export default function SettingsScreen() {
 
                 <SettingsEntry
                   title="Gespeicherte Termine"
-                  subtitle="Anzahl der aktuell lokal gespeicherten Einträge"
+                  subtitle="Anzahl der aktuell gespeicherten Eintraege"
                   value={String(storageStats?.count ?? 0)}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+
+                <SettingsEntry
+                  title="Feiertagsland"
+                  subtitle="Bestimmt, welche Feiertage im Kalender markiert werden"
+                  value={HOLIDAY_COUNTRIES.find((item) => item.code === appSettings.holidayCountry)?.label}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.chipWrap}>
+                  {HOLIDAY_COUNTRIES.map((country) => {
+                    const active = appSettings.holidayCountry === country.code;
+                    return (
+                      <Pressable
+                        key={country.code}
+                        onPress={() => updateAppSettings({ holidayCountry: country.code })}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {country.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <View style={styles.separatorInner} />
+
+                <ToggleRow
+                  title="Feiertage anzeigen"
+                  subtitle="Laenderspezifische Feiertage im Kalender markieren"
+                  value={appSettings.showHolidays}
+                  onValueChange={(value) => updateAppSettings({ showHolidays: value })}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+
+                <ToggleRow
+                  title="Sonntage markieren"
+                  subtitle="Sonntage optisch hervorheben"
+                  value={appSettings.showSundays}
+                  onValueChange={(value) => updateAppSettings({ showSundays: value })}
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -850,7 +951,7 @@ export default function SettingsScreen() {
 
                 <SettingsEntry
                   title="Kalender zurücksetzen"
-                  subtitle="Alle lokalen Kalenderdaten löschen"
+                  subtitle="Alle gespeicherten Kalenderdaten loeschen"
                   destructive
                   onPress={askResetCalendar}
                   colors={colors}
@@ -931,7 +1032,7 @@ export default function SettingsScreen() {
               <View style={styles.settingsList}>
                 <SettingsEntry
                   title="Angemeldeter Benutzer"
-                  subtitle="Wird aus Supabase geladen"
+                  subtitle="Dieses Profil wird fuer deine App-Daten verwendet"
                   value={displayName}
                   colors={colors}
                   fontFamily={fontFamily}
@@ -948,9 +1049,9 @@ export default function SettingsScreen() {
                 <View style={styles.separatorInner} />
 
                 <SettingsEntry
-                  title="Login-Anbieter"
-                  subtitle="E-Mail, Apple oder Google je nach Anmeldung"
-                  value={user?.app_metadata?.provider ?? 'Unbekannt'}
+                  title="Konto-Status"
+                  subtitle="Deine Daten werden deinem Konto zugeordnet und koennen auf deinen Geraeten geladen werden"
+                  value="Angemeldet"
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -965,7 +1066,7 @@ export default function SettingsScreen() {
 
               <Pressable onPress={askDeleteAccount} style={styles.deleteAccountButton}>
                 <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
-                <Text style={styles.logoutText}>Account löschen</Text>
+                <Text style={styles.logoutText}>Account loeschen</Text>
               </Pressable>
             </View>
           </>
@@ -981,10 +1082,34 @@ export default function SettingsScreen() {
                   title="Todo-Erinnerungen"
                   subtitle="Benachrichtigungen für offene Aufgaben"
                   value={todoNotifications}
-                  onValueChange={setTodoNotifications}
+                  onValueChange={(value) => updateNotificationSettings({ todosEnabled: value })}
                   colors={colors}
                   fontFamily={fontFamily}
                 />
+                <View style={styles.chipWrap}>
+                  {([
+                    ['smart', 'Smart'],
+                    ['same_day', 'Selber Tag'],
+                    ['next_morning', 'Naechster Morgen'],
+                    ['off', 'Aus'],
+                  ] as [TodoReminderMode, string][]).map(([modeId, label]) => {
+                    const active = appSettings.notifications.todoMode === modeId;
+                    return (
+                      <Pressable
+                        key={modeId}
+                        onPress={() => updateNotificationSettings({
+                          todoMode: modeId,
+                          todosEnabled: modeId !== 'off',
+                        })}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
                 <View style={styles.separatorInner} />
 
                 <ToggleRow
@@ -1001,17 +1126,43 @@ export default function SettingsScreen() {
                   title="Termin-Erinnerungen"
                   subtitle="Hinweise vor Kalenderterminen"
                   value={eventNotifications}
-                  onValueChange={setEventNotifications}
+                  onValueChange={(value) => updateNotificationSettings({ eventsEnabled: value })}
                   colors={colors}
                   fontFamily={fontFamily}
                 />
+                <View style={styles.chipWrap}>
+                  {([
+                    ['at_time', 'Startzeit'],
+                    ['5m', '5 Min'],
+                    ['15m', '15 Min'],
+                    ['30m', '30 Min'],
+                    ['1h', '1 Std'],
+                    ['1d', '1 Tag'],
+                  ] as [NotificationLeadTime, string][]).map(([leadTime, label]) => {
+                    const active = appSettings.notifications.eventLeadTime === leadTime;
+                    return (
+                      <Pressable
+                        key={leadTime}
+                        onPress={() => updateNotificationSettings({
+                          eventLeadTime: leadTime,
+                          eventsEnabled: true,
+                        })}
+                        style={[styles.chip, active && styles.chipActive]}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
                 <View style={styles.separatorInner} />
 
                 <ToggleRow
                   title="Tägliche Zusammenfassung"
                   subtitle="Ein kompakter Überblick über deinen Tag"
                   value={dailySummaryNotifications}
-                  onValueChange={setDailySummaryNotifications}
+                  onValueChange={(value) => updateNotificationSettings({ dailySummaryEnabled: value })}
                   colors={colors}
                   fontFamily={fontFamily}
                 />
@@ -1019,12 +1170,11 @@ export default function SettingsScreen() {
             </View>
 
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Geplante Erweiterungen</Text>
-              <Text style={styles.infoText}>• Uhrzeit für Habit-Erinnerungen</Text>
-              <Text style={styles.infoText}>• Erinnerung vor Todos nach Priorität</Text>
-              <Text style={styles.infoText}>• Benachrichtigungen pro Kalender</Text>
-              <Text style={styles.infoText}>• Ruhezeiten / Nicht stören</Text>
-              <Text style={styles.infoText}>• Smarte Tageszusammenfassung</Text>
+              <Text style={styles.detailTitle}>Aktive Logik</Text>
+              <Text style={styles.infoText}>• Todos: {appSettings.notifications.todoMode}</Text>
+              <Text style={styles.infoText}>• Termine: {appSettings.notifications.eventLeadTime} vorher</Text>
+              <Text style={styles.infoText}>• Tagesübersicht: {appSettings.notifications.dailySummaryEnabled ? appSettings.notifications.dailySummaryTime : 'aus'}</Text>
+              <Text style={styles.infoText}>• Benachrichtigungen werden nur geplant, wenn die System-Berechtigung erteilt ist.</Text>
             </View>
           </>
         )}
@@ -1033,24 +1183,24 @@ export default function SettingsScreen() {
           <>
             <View style={styles.detailCard}>
               <Text style={styles.detailTitle}>Info</Text>
-              <Text style={styles.infoText}>• App-Name: Kalendulu</Text>
-              <Text style={styles.infoText}>• Version und Changelog</Text>
-              <Text style={styles.infoText}>• Login / Account</Text>
-              <Text style={styles.infoText}>• Profilbild</Text>
-              <Text style={styles.infoText}>• Sync / Backup</Text>
-              <Text style={styles.infoText}>• Premium / Abo</Text>
-              <Text style={styles.infoText}>• Datenschutz / Impressum</Text>
-              <Text style={styles.infoText}>• Hilfe / Support</Text>
-              <Text style={styles.infoText}>• Feedback senden</Text>
+              <Text style={styles.infoText}>• App: Kalendulu</Text>
+              <Text style={styles.infoText}>• Version: 1.0.0</Text>
+              <Text style={styles.infoText}>• Konto: Ziele, Todos, Habits, Termine und Einstellungen werden deinem Konto zugeordnet.</Text>
+              <Text style={styles.infoText}>• Synchronisierung: Deine App-Daten koennen nach dem Login auf mehreren Geraeten geladen werden.</Text>
+              <Text style={styles.infoText}>• KI: Zieltexte und Antworten koennen verarbeitet werden, um Fragen und Plaene zu erstellen.</Text>
+              <Text style={styles.infoText}>• Werbung: Vor KI-Erstellungen kann eine Rewarded Ad angezeigt werden.</Text>
+              <Text style={styles.infoText}>• Kalender: JSON/ICS Import und Export, Laender-Feiertage und farbige Termine.</Text>
+              <Text style={styles.infoText}>• Profil: Name, E-Mail und Profilbild sind im Konto verwaltbar.</Text>
+              <Text style={styles.infoText}>• Feedback: Deine Step-Feedbacks helfen, kuenftige Plaene besser anzupassen.</Text>
             </View>
 
             <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Später erweiterbar</Text>
-              <Text style={styles.infoText}>• iCloud / Cloud Sync</Text>
-              <Text style={styles.infoText}>• Geräteübergreifendes Backup</Text>
-              <Text style={styles.infoText}>• Export kompletter App-Daten</Text>
-              <Text style={styles.infoText}>• Premium-Funktionen</Text>
-              <Text style={styles.infoText}>• KI-Statistiken und tiefergehende Analysen</Text>
+              <Text style={styles.detailTitle}>Rechtliches</Text>
+              <Text style={styles.infoText}>• Datenschutz: Vor dem Store-Launch muss eine echte Datenschutzerklaerung mit Betreiberangaben verlinkt werden.</Text>
+              <Text style={styles.infoText}>• Impressum: Fuer oeffentliche Nutzung muessen Anbieter, Kontakt und verantwortliche Person sichtbar sein.</Text>
+              <Text style={styles.infoText}>• Account-Loeschung: Nutzer muessen ihr Konto und ihre Daten vollstaendig loeschen koennen.</Text>
+              <Text style={styles.infoText}>• KI-Hinweis: Plaene koennen Fehler enthalten und ersetzen keine medizinische, rechtliche oder finanzielle Beratung.</Text>
+              <Text style={styles.infoText}>• Push: Benachrichtigungen werden nur nach deiner Berechtigung verwendet.</Text>
             </View>
           </>
         )}
@@ -1268,6 +1418,36 @@ function makeStyles(
       overflow: 'hidden',
       borderWidth: 1,
       borderColor: colors.border,
+    },
+    chipWrap: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      paddingHorizontal: 12,
+      paddingVertical: 12,
+    },
+    chip: {
+      minHeight: 34,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    chipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    chipText: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+    },
+    chipTextActive: {
+      color: colors.primaryText,
     },
     infoText: {
       color: colors.textMuted,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   Easing,
@@ -59,7 +59,7 @@ export default function WelcomeIntroOverlay({
 }: WelcomeIntroOverlayProps) {
   const greeting = useMemo(() => getGreeting(), []);
   const [startTypingName, setStartTypingName] = useState(false);
-  const [isClosing, setIsClosing] = useState(false);
+  const isClosingRef = useRef(false);
 
   const overlayOpacity = useSharedValue(0);
   const contentOpacity = useSharedValue(0);
@@ -77,9 +77,9 @@ export default function WelcomeIntroOverlay({
   const finishTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blinkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const closeOverlay = () => {
-    if (isClosing) return;
-    setIsClosing(true);
+  const closeOverlay = useCallback(() => {
+    if (isClosingRef.current) return;
+    isClosingRef.current = true;
 
     if (typingStartTimerRef.current) clearTimeout(typingStartTimerRef.current);
     if (finishTimerRef.current) clearTimeout(finishTimerRef.current);
@@ -97,12 +97,12 @@ export default function WelcomeIntroOverlay({
         }
       }
     );
-  };
+  }, [onFinish, overlayOpacity]);
 
   useEffect(() => {
     if (!visible) return;
 
-    setIsClosing(false);
+    isClosingRef.current = false;
     overlayOpacity.value = 0;
     contentOpacity.value = 0;
     lineMaskWidth.value = 0;
@@ -183,6 +183,7 @@ export default function WelcomeIntroOverlay({
     penX,
     nameOpacity,
     nameCursorOpacity,
+    closeOverlay,
   ]);
 
   const overlayStyle = useAnimatedStyle(() => ({

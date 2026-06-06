@@ -4,16 +4,17 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { useAuth } from '@/src/auth/AuthProvider';
+import { DEV_AUTH_BYPASS } from '@/src/config/auth';
 
 export default function TabLayout() {
   const { colors } = useAppTheme();
-  const { authReady, session } = useAuth();
+  const { authReady, user } = useAuth();
 
   if (!authReady) {
     return null;
   }
 
-  if (!session) {
+  if (!user && !DEV_AUTH_BYPASS) {
     return <Redirect href="/login" />;
   }
 
@@ -78,7 +79,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="psyche"
         options={{
-          title: 'Psyche',
+          title: 'Goal',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="sparkles-outline" size={size} color={color} />
           ),

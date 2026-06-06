@@ -7,9 +7,10 @@ import {
   UserPlanningProfile,
 } from './types';
 import type { FreeSlot } from './buildFreeSlots';
+import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
+import type { UserGoalLearningProfile } from '../ai/adaptiveGoal';
 
 const API_URL = process.env.EXPO_PUBLIC_PLANNER_API_URL;
-const APP_SECRET = process.env.EXPO_PUBLIC_APP_SHARED_SECRET;
 
 type PlannerApiRequest = {
   goal: string;
@@ -21,6 +22,7 @@ type PlannerApiRequest = {
   freeSlots: FreeSlot[];
   answers?: GoalAnswerMap;
   userPlanningProfile?: UserPlanningProfile;
+  goalLearningProfile?: UserGoalLearningProfile;
 };
 
 function isPlannerBundle(value: any): value is PlannerBundle {
@@ -52,10 +54,7 @@ export async function fetchPlannerBundle(
 
   const res = await fetch(`${API_URL}/planner/suggest`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(APP_SECRET ? { 'X-App-Secret': APP_SECRET } : {}),
-    },
+    headers: await buildAuthenticatedJsonHeaders(),
     body: JSON.stringify(input),
   });
 

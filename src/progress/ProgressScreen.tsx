@@ -24,6 +24,14 @@ import {
 } from '../psyche/types';
 import { loadPsycheGoals, savePsycheGoals } from '../psyche/storage';
 import { useAppTheme } from '../theme/ThemeProvider';
+import {
+  getGoalFeedbackEvents,
+  getUserGoalLearningProfile,
+  recordGoalFeedbackEvent,
+  updateLearningProfileFromFeedback,
+  type GoalFeedbackEvent,
+  type RegenerationRequest,
+} from '../ai/adaptiveGoal';
 
 dayjs.locale('de');
 
@@ -66,6 +74,30 @@ type AppGoal = PsycheGoal & {
   executionPlan?: GoalExecutionPlan;
 };
 
+type VisibleStep = {
+  id: string;
+  stepId?: string;
+  itemId?: string;
+  title: string;
+  description?: string;
+  done?: boolean;
+  type: 'manual' | 'ai' | 'ai_step' | 'mini';
+};
+
+type RefreshReason = RegenerationRequest['reason'];
+type RefreshTarget = VisibleStep;
+
+const REFRESH_REASONS: { id: RefreshReason; label: string }[] = [
+  { id: 'too_hard', label: 'Zu schwer' },
+  { id: 'too_easy', label: 'Zu leicht' },
+  { id: 'too_vague', label: 'Zu unklar' },
+  { id: 'not_relevant', label: 'Passt nicht' },
+  { id: 'time_conflict', label: 'Zeitproblem' },
+  { id: 'changed_goal', label: 'Ziel geaendert' },
+  { id: 'boring', label: 'Langweilig' },
+  { id: 'user_requested', label: 'Neu denken' },
+];
+
 const DEFAULT_HORIZONS: CustomHorizon[] = [
   { id: 'life', title: 'Lebensziele', yearsFrom: 20, order: 1 },
   { id: 'tenYears', title: '10 Jahres Ziele', yearsFrom: 10, order: 2 },
@@ -104,12 +136,45 @@ function buildMiniStepsFromManual(steps: ManualStep[]): GoalMiniStep[] {
   }));
 }
 
+function mapAiStepsToMiniSteps(steps: PlannerExecutionStep[]): GoalMiniStep[] {
+  return steps.flatMap((step, stepIndex) => {
+    const checklist = step.checklist ?? [];
+    if (!checklist.length) {
+      return [{
+        id: step.id,
+        order: stepIndex + 1,
+        title: step.title,
+        description: step.explanation || step.whyItMatters || step.title,
+        done: false,
+        status: 'active' as GoalMiniStepStatus,
+        linkedTodoTitles: step.linkedTodoTitles ?? [],
+        linkedHabitTitles: step.linkedHabitTitles ?? [],
+      }];
+    }
+
+    return checklist.map((item, itemIndex) => ({
+      id: `${step.id}_${item.id}`,
+      order: stepIndex * 10 + itemIndex + 1,
+      title: item.label,
+      description: step.title,
+      done: !!item.done,
+      status: toMiniStepStatus(!!item.done),
+      linkedTodoTitles: step.linkedTodoTitles ?? [],
+      linkedHabitTitles: step.linkedHabitTitles ?? [],
+    }));
+  });
+}
+
 function getManualSteps(goal: AppGoal): ManualStep[] {
   return Array.isArray(goal.manualSteps) ? goal.manualSteps : [];
 }
 
 function getAiSteps(goal: AppGoal): PlannerExecutionStep[] {
   return Array.isArray(goal.executionPlan?.steps) ? goal.executionPlan.steps : [];
+}
+
+function getFallbackMiniSteps(goal: AppGoal): GoalMiniStep[] {
+  return Array.isArray(goal.miniSteps) ? goal.miniSteps : [];
 }
 
 function computeGoalProgress(goal: AppGoal) {
@@ -127,6 +192,12 @@ function computeGoalProgress(goal: AppGoal) {
 
   if (total > 0) {
     return Math.round(((manualDone + aiDone) / total) * 100);
+  }
+
+  const fallbackMiniSteps = getFallbackMiniSteps(goal);
+  if (fallbackMiniSteps.length) {
+    const miniDone = fallbackMiniSteps.filter((step) => !!step.done || step.status === 'done').length;
+    return Math.round((miniDone / fallbackMiniSteps.length) * 100);
   }
 
   if (typeof goal.progressPercent === 'number') {
@@ -172,12 +243,6 @@ function inferGoalHorizon(goal: AppGoal, customHorizons: CustomHorizon[]): strin
   return lastByOrder?.id ?? 'short';
 }
 
-function prettyGoalCategory(goal: AppGoal, categories: CustomGoalCategory[]) {
-  if (goal.customCategoryLabel?.trim()) return goal.customCategoryLabel.trim();
-  const found = categories.find((item) => item.id === goal.category);
-  return found?.title ?? 'Andere';
-}
-
 function getHorizonColor(horizonId: string, customHorizons: CustomHorizon[]) {
   const ordered = [...customHorizons].sort((a, b) => a.order - b.order);
   const palette = ['#7EDB7A', '#6AD2FF', '#C6A2FF', '#FFB870', '#D4AF37', '#FF9CC7', '#9BE7D8'];
@@ -218,27 +283,33 @@ function StepRow({
   description,
   done,
   onToggle,
+  onRefresh,
   styles,
 }: {
   title: string;
   description?: string;
   done?: boolean;
   onToggle: () => void;
+  onRefresh: () => void;
   styles: ReturnType<typeof createStyles>;
 }) {
   return (
-    <Pressable onPress={onToggle} style={styles.stepRow}>
-      <View style={[styles.check, done && styles.checkDone]}>
+    <View style={styles.stepRow}>
+      <Pressable onPress={onToggle} style={[styles.check, done && styles.checkDone]}>
         {done ? <Text style={styles.checkMark}>✓</Text> : null}
-      </View>
+      </Pressable>
 
-      <View style={styles.stepTextWrap}>
+      <Pressable onPress={onToggle} style={styles.stepTextWrap}>
         <Text style={[styles.stepTitle, done && styles.stepTitleDone]}>{title}</Text>
         {!!description && description !== title ? (
           <Text style={styles.stepDescription}>{description}</Text>
         ) : null}
-      </View>
-    </Pressable>
+      </Pressable>
+
+      <Pressable onPress={onRefresh} style={styles.refreshStepBtn}>
+        <Text style={styles.refreshStepBtnText}>Neu</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -276,6 +347,10 @@ export default function ProgressScreen({ navigation }: Props) {
   const [draftSteps, setDraftSteps] = useState<ManualStep[]>([]);
   const [newStepTitle, setNewStepTitle] = useState('');
   const [newStepDescription, setNewStepDescription] = useState('');
+  const [refreshOpen, setRefreshOpen] = useState(false);
+  const [refreshTarget, setRefreshTarget] = useState<RefreshTarget | null>(null);
+  const [refreshReason, setRefreshReason] = useState<RefreshReason>('user_requested');
+  const [refreshComment, setRefreshComment] = useState('');
 
   const reloadGoals = useCallback(async () => {
     const storedGoals = (await loadPsycheGoals()) as AppGoal[];
@@ -338,7 +413,7 @@ export default function ProgressScreen({ navigation }: Props) {
     return groups;
   }, [goals, horizons]);
 
-  const visibleSteps = useMemo(() => {
+  const visibleSteps = useMemo<VisibleStep[]>(() => {
     if (!selectedGoal) return [];
 
     const manualSteps = getManualSteps(selectedGoal);
@@ -353,17 +428,40 @@ export default function ProgressScreen({ navigation }: Props) {
     }
 
     const aiSteps = getAiSteps(selectedGoal);
-    return aiSteps.flatMap((step) =>
-      (step.checklist ?? []).map((item) => ({
-        id: `${step.id}_${item.id}`,
-        stepId: step.id,
-        itemId: item.id,
-        title: item.label,
-        description: step.explanation || '',
-        done: !!item.done,
-        type: 'ai' as const,
-      })),
-    );
+    if (aiSteps.length) {
+      return aiSteps.flatMap((step): VisibleStep[] => {
+        const checklist = step.checklist ?? [];
+        if (!checklist.length) {
+          return [{
+            id: step.id,
+            stepId: step.id,
+            itemId: '',
+            title: step.title,
+            description: step.explanation || step.whyItMatters || '',
+            done: false,
+            type: 'ai_step' as const,
+          }];
+        }
+
+        return checklist.map((item) => ({
+          id: `${step.id}_${item.id}`,
+          stepId: step.id,
+          itemId: item.id,
+          title: item.label,
+          description: `${step.title}${step.explanation ? `: ${step.explanation}` : ''}`,
+          done: !!item.done,
+          type: 'ai' as const,
+        }));
+      });
+    }
+
+    return getFallbackMiniSteps(selectedGoal).map((step) => ({
+      id: step.id,
+      title: step.title,
+      description: step.description,
+      done: !!step.done,
+      type: 'mini' as const,
+    }));
   }, [selectedGoal]);
 
   async function persistGoals(nextGoals: AppGoal[]) {
@@ -665,6 +763,154 @@ export default function ProgressScreen({ navigation }: Props) {
     const nextGoals = goals.map((goal) => (goal.id === selectedGoal.id ? nextGoal : goal));
     await persistGoals(nextGoals);
     setEditOpen(false);
+  }
+
+  function openRefreshStep(step: RefreshTarget) {
+    setRefreshTarget(step);
+    setRefreshReason('user_requested');
+    setRefreshComment('');
+    setRefreshOpen(true);
+  }
+
+  function eventTypeForRefresh(reason: RefreshReason): GoalFeedbackEvent['eventType'] {
+    if (reason === 'too_hard') return 'user_said_too_hard';
+    if (reason === 'too_easy') return 'user_said_too_easy';
+    if (reason === 'not_relevant') return 'user_said_not_relevant';
+    return 'user_requested_refresh';
+  }
+
+  function regeneratedStepTitle(step: RefreshTarget, reason: RefreshReason) {
+    const base = step.title.replace(/^Neu:\s*/i, '').trim();
+    if (reason === 'too_hard') return `Kleiner Start: ${base}`;
+    if (reason === 'too_easy') return `Naechster anspruchsvoller Schritt: ${base}`;
+    if (reason === 'too_vague') return `Konkretes Ergebnis liefern: ${base}`;
+    if (reason === 'time_conflict') return `Kurzversion einplanen: ${base}`;
+    if (reason === 'not_relevant') return `Besser passend: ${base}`;
+    if (reason === 'changed_goal') return `An neues Ziel anpassen: ${base}`;
+    if (reason === 'boring') return `Aktiver und messbarer: ${base}`;
+    return `Neu: ${base}`;
+  }
+
+  function regeneratedStepDescription(step: RefreshTarget, reason: RefreshReason, comment: string) {
+    const note = comment.trim();
+    const feedback = note ? ` Nutzerfeedback: ${note}` : '';
+
+    switch (reason) {
+      case 'too_hard':
+        return `Reduziere diesen Schritt auf eine Version, die in 10 bis 20 Minuten begonnen werden kann. Ergebnis: ein sichtbarer Mini-Fortschritt.${feedback}`;
+      case 'too_easy':
+        return `Erhoehe die Herausforderung so, dass ein pruefbares Ergebnis entsteht. Ergebnis: ein konkreter Output, der den naechsten Schritt vorbereitet.${feedback}`;
+      case 'too_vague':
+        return `Formuliere den Schritt als klare Handlung: Was genau wird erledigt, woran ist es fertig, und was ist der naechste Beweis fuer Fortschritt?${feedback}`;
+      case 'not_relevant':
+        return `Ersetze diesen Schritt durch eine passendere Aktion fuer das Ziel. Ergebnis: etwas, das direkt auf das Ziel einzahlt.${feedback}`;
+      case 'time_conflict':
+        return `Plane eine kleinere Variante mit fester Dauer. Ergebnis: eine Aktion, die trotz wenig Zeit erledigt werden kann.${feedback}`;
+      case 'changed_goal':
+        return `Passe den Schritt an die neue Zielrichtung an. Ergebnis: eine aktualisierte Aktion, die keine alte Annahme mehr braucht.${feedback}`;
+      case 'boring':
+        return `Mache den Schritt aktiver und sichtbarer. Ergebnis: ein kurzer Output oder Test, der Motivation und Fortschritt sofort zeigt.${feedback}`;
+      default:
+        return step.description
+          ? `${step.description}${feedback}`
+          : `Neu aufgebauter Schritt mit klarerem Ergebnis.${feedback}`;
+    }
+  }
+
+  async function handleRegenerateStep() {
+    if (!selectedGoal || !refreshTarget) return;
+
+    const nextTitle = regeneratedStepTitle(refreshTarget, refreshReason);
+    const nextDescription = regeneratedStepDescription(refreshTarget, refreshReason, refreshComment);
+
+    let nextGoal: AppGoal = selectedGoal;
+
+    if (refreshTarget.type === 'manual') {
+      const nextManualSteps = getManualSteps(selectedGoal).map((step) =>
+        step.id === refreshTarget.id
+          ? { ...step, title: nextTitle, description: nextDescription, done: false, status: 'active' as const }
+          : step,
+      );
+      nextGoal = {
+        ...selectedGoal,
+        manualSteps: nextManualSteps,
+        miniSteps: buildMiniStepsFromManual(nextManualSteps),
+      };
+    } else if (refreshTarget.type === 'mini') {
+      const nextMiniSteps = getFallbackMiniSteps(selectedGoal).map((step) =>
+        step.id === refreshTarget.id
+          ? { ...step, title: nextTitle, description: nextDescription, done: false, status: 'active' as const }
+          : step,
+      );
+      nextGoal = {
+        ...selectedGoal,
+        miniSteps: nextMiniSteps,
+      };
+    } else if (selectedGoal.executionPlan) {
+      const nextSteps: PlannerExecutionStep[] = getAiSteps(selectedGoal).map((step) => {
+        if (refreshTarget.type === 'ai_step' && step.id === refreshTarget.stepId) {
+          return {
+            ...step,
+            title: nextTitle,
+            explanation: nextDescription,
+            whyItMatters: 'Dieser Schritt wurde anhand deines Feedbacks angepasst.',
+          };
+        }
+
+        if (refreshTarget.type === 'ai' && step.id === refreshTarget.stepId) {
+          return {
+            ...step,
+            checklist: (step.checklist ?? []).map((item) =>
+              item.id === refreshTarget.itemId
+                ? { ...item, label: nextTitle, done: false }
+                : item,
+            ),
+          };
+        }
+
+        return step;
+      });
+
+      nextGoal = {
+        ...selectedGoal,
+        executionPlan: {
+          ...selectedGoal.executionPlan,
+          steps: nextSteps,
+        },
+        miniSteps: mapAiStepsToMiniSteps(nextSteps),
+      };
+    }
+
+    nextGoal = {
+      ...nextGoal,
+      progressPercent: computeGoalProgress(nextGoal),
+    };
+
+    const nextGoals = goals.map((goal) => (goal.id === selectedGoal.id ? nextGoal : goal));
+    await persistGoals(nextGoals);
+
+    const feedbackEvent: GoalFeedbackEvent = {
+      id: uid('feedback'),
+      goalId: selectedGoal.id,
+      eventType: eventTypeForRefresh(refreshReason),
+      targetType: 'step',
+      targetId: refreshTarget.stepId || refreshTarget.id,
+      userComment: refreshComment.trim() || refreshReason,
+      timestamp: new Date().toISOString(),
+    };
+
+    await recordGoalFeedbackEvent(feedbackEvent);
+    const profile = await getUserGoalLearningProfile();
+    const events = await getGoalFeedbackEvents(selectedGoal.id);
+    await updateLearningProfileFromFeedback({
+      currentProfile: profile,
+      events,
+    });
+
+    setRefreshOpen(false);
+    setRefreshTarget(null);
+    setRefreshComment('');
+    Alert.alert('Neu erstellt', 'Der Step wurde angepasst. Dein Feedback beeinflusst kuenftige KI-Plaene.');
   }
 
   async function handleDeleteGoal() {
@@ -1099,6 +1345,14 @@ export default function ProgressScreen({ navigation }: Props) {
         </Pressable>
 
         <Text style={styles.detailTitle}>Step by Step</Text>
+        <Text style={styles.detailSubtitle}>
+          {selectedGoal.title} · {computeGoalProgress(selectedGoal)}% · {visibleSteps.length} Aktionen
+        </Text>
+        {selectedGoal.recommendation?.summary || selectedGoal.executionPlan?.summary ? (
+          <Text style={styles.detailSummary}>
+            {selectedGoal.recommendation?.summary ?? selectedGoal.executionPlan?.summary}
+          </Text>
+        ) : null}
 
         <View style={styles.stepsWrap}>
           {visibleSteps.length ? (
@@ -1111,10 +1365,11 @@ export default function ProgressScreen({ navigation }: Props) {
                 onToggle={() => {
                   if (step.type === 'manual') {
                     void handleToggleManualStep(step.id);
-                  } else {
+                  } else if (step.type === 'ai' && step.stepId && step.itemId) {
                     void handleToggleAiChecklist(step.stepId, step.itemId);
                   }
                 }}
+                onRefresh={() => openRefreshStep(step)}
                 styles={styles}
               />
             ))
@@ -1207,6 +1462,59 @@ export default function ProgressScreen({ navigation }: Props) {
               </Pressable>
               <Pressable style={styles.primaryBtn} onPress={handleSaveDraftSteps}>
                 <Text style={styles.primaryBtnText}>Speichern</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={refreshOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setRefreshOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle}>Step neu erstellen</Text>
+            <Text style={styles.sheetSubtitle}>
+              Sag kurz, warum dieser Step nicht passt. Daraus lernt die Planlogik fuer kuenftige Ziele.
+            </Text>
+
+            <Text style={styles.label}>Grund</Text>
+            <View style={styles.reasonGrid}>
+              {REFRESH_REASONS.map((reason) => {
+                const active = refreshReason === reason.id;
+                return (
+                  <Pressable
+                    key={reason.id}
+                    onPress={() => setRefreshReason(reason.id)}
+                    style={[styles.reasonChip, active && styles.reasonChipActive]}
+                  >
+                    <Text style={[styles.reasonChipText, active && styles.reasonChipTextActive]}>
+                      {reason.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <Text style={styles.label}>Kurzfeedback</Text>
+            <TextInput
+              value={refreshComment}
+              onChangeText={setRefreshComment}
+              placeholder="z. B. zu grob, keine Zeit, falsche Richtung..."
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, styles.textarea]}
+              multiline
+            />
+
+            <View style={styles.modalActions}>
+              <Pressable style={styles.secondaryBtn} onPress={() => setRefreshOpen(false)}>
+                <Text style={styles.secondaryBtnText}>Abbrechen</Text>
+              </Pressable>
+              <Pressable style={styles.primaryBtn} onPress={() => void handleRegenerateStep()}>
+                <Text style={styles.primaryBtnText}>Neu erstellen</Text>
               </Pressable>
             </View>
           </View>
@@ -1388,6 +1696,23 @@ function createStyles(
       marginTop: 4,
       fontFamily: fontFamily.regular,
     },
+    refreshStepBtn: {
+      minHeight: 32,
+      paddingHorizontal: 12,
+      borderRadius: 999,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginLeft: 10,
+    },
+    refreshStepBtnText: {
+      color: colors.primary,
+      fontSize: 12,
+      fontWeight: '800',
+      fontFamily: fontFamily.bold,
+    },
 
     fab: {
       position: 'absolute',
@@ -1468,6 +1793,14 @@ function createStyles(
       marginBottom: 18,
       fontFamily: fontFamily.bold,
     },
+    sheetSubtitle: {
+      color: colors.textMuted,
+      fontSize: 14,
+      lineHeight: 20,
+      marginTop: -8,
+      marginBottom: 16,
+      fontFamily: fontFamily.regular,
+    },
 
     label: {
       color: colors.textMuted,
@@ -1491,6 +1824,35 @@ function createStyles(
     textarea: {
       minHeight: 84,
       textAlignVertical: 'top',
+    },
+    reasonGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 14,
+    },
+    reasonChip: {
+      minHeight: 36,
+      borderRadius: 999,
+      paddingHorizontal: 12,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    reasonChipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    reasonChipText: {
+      color: colors.text,
+      fontSize: 12,
+      fontWeight: '700',
+      fontFamily: fontFamily.bold,
+    },
+    reasonChipTextActive: {
+      color: colors.primaryText,
     },
 
     pillRow: {
@@ -1659,8 +2021,22 @@ function createStyles(
       color: colors.text,
       fontSize: 30,
       fontWeight: '800',
-      marginBottom: 20,
+      marginBottom: 8,
       fontFamily: fontFamily.bold,
+    },
+    detailSubtitle: {
+      color: colors.textMuted,
+      fontSize: 14,
+      fontWeight: '800',
+      marginBottom: 10,
+      fontFamily: fontFamily.bold,
+    },
+    detailSummary: {
+      color: colors.text,
+      opacity: 0.84,
+      lineHeight: 21,
+      marginBottom: 16,
+      fontFamily: fontFamily.regular,
     },
   });
 }

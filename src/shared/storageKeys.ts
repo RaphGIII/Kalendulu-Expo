@@ -4,4 +4,5 @@ export const STORAGE_KEYS = {
   CALENDAR_EVENTS: 'kalendulu:calendar:events:v1',
 
   THEME_SETTINGS: 'kalendulu:theme-settings:v1',
+  APP_SETTINGS: 'kalendulu:app-settings:v1',
 };

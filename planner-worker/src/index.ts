@@ -4,12 +4,16 @@ import {
   type GoalStateSignal,
   type MasterBlueprintOutput,
 } from './coachEngine';
+import { callOpenAiJsonText } from './openai/chatJson';
+import { selectOpenAiModel } from './openai/modelSelection';
 
 export interface Env {
-  GROQ_API_KEY: string;
-  APP_SHARED_SECRET?: string;
-  GROQ_MODEL_REFINE?: string;
-  GROQ_MODEL_PLAN?: string;
+  OPENAI_API_KEY: string;
+  SUPABASE_URL: string;
+  SUPABASE_PUBLISHABLE_KEY: string;
+  OPENAI_MODEL_CHEAP?: string;
+  OPENAI_MODEL_BALANCED?: string;
+  OPENAI_MODEL_STRONG?: string;
 }
 
 type GoalQuestion = {
@@ -164,7 +168,7 @@ function jsonResponse(data: unknown, status = 200) {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-App-Secret',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     },
   });
 }
@@ -254,11 +258,11 @@ function curvedCount(level: number, min: number, max: number) {
 }
 
 function questionCountForDifficulty(level: number) {
-  return curvedCount(level, 5, 40);
+  return curvedCount(level, 4, 16);
 }
 
 function stepCountForDifficulty(level: number) {
-  return curvedCount(level, 10, 50);
+  return curvedCount(level, 5, 14);
 }
 
 function inferGoalType(goal: string): GoalRefinementResponse['goalType'] {
@@ -394,10 +398,17 @@ Antworte NUR mit gültigem JSON.
 AUFGABE:
 - Analysiere das Ziel.
 - Erstelle GENAU ${targetQuestionCount} Fragen auf Deutsch.
+- Die Fragen werden von der KI als echte Diagnose erzeugt: klug, zielfuehrend, nicht banal.
 - Die Fragen müssen tief genug sein, damit danach ein hochpräziser Blueprint mit Problembaum, Mustererkennung, Hebeln, Failure Modes und milestone-basiertem Plan erzeugt werden kann.
 - Schwierige Ziele brauchen deutlich tiefere Diagnostik.
 - Die Fragen müssen nach Relevanz priorisiert sein.
 - Nutze Fragearten: text, long_text, single_choice, multi_choice.
+- Jede Frage muss eine Planvariable klaeren, die spaeter eine konkrete Entscheidung veraendert: Zeitbudget, Engpass, Startniveau, Messkriterium, Ressource, Risiko, naechster Output oder harte Deadline.
+- whyAsked darf nie generisch sein. Erklaere kurz, welche Planentscheidung von der Antwort abhaengt.
+- Keine Frage darf dieselbe Bedeutung wie eine andere Frage haben.
+- Jede Frage muss das konkrete Ziel sprachlich aufgreifen. Keine generischen Coachingfragen, die fuer jedes Ziel gleich passen.
+- Stelle bei komplexen Zielen mehr Diagnosefragen zu Sequenz, Skill-Luecken, Ressourcen, Abbruchrisiko, Messung, Review-Rhythmus und erstem sichtbarem Output.
+- Single-Choice-Optionen muessen echte Strategieentscheidungen abbilden, nicht nur weich klingende Vorlieben.
 
 COACHING-HALTUNG:
 - Denke wie ein fordernder Elite-Coach.
@@ -486,6 +497,38 @@ function buildRoutineBlocks(frequencyPerWeek: number, durationMinutes: number) {
   return blocks;
 }
 
+const vagueActionPattern =
+  /^(fortschrittsphase\s+\d+|phase\s+\d+|umsetzungsphase|wichtige phase|weiterarbeiten|fortschritt sichern|strukturieren|dranbleiben)$/i;
+
+function isWeakActionText(value?: string) {
+  const text = safeString(value).trim();
+  if (!text) return true;
+  if (text.length < 12) return true;
+  return vagueActionPattern.test(text);
+}
+
+function concreteChecklistFor(goal: string, stepTitle: string, stepIndex: number) {
+  const cleanStep = safeString(stepTitle).trim() || `Schritt ${stepIndex + 1}`;
+
+  return [
+    {
+      id: `c_${stepIndex + 1}_1`,
+      label: `Ergebnis fuer "${cleanStep}" vor dem Start schriftlich festlegen`,
+      done: false,
+    },
+    {
+      id: `c_${stepIndex + 1}_2`,
+      label: `Einen ungestoerten Arbeitsblock nur fuer "${goal}" abschliessen`,
+      done: false,
+    },
+    {
+      id: `c_${stepIndex + 1}_3`,
+      label: `Sichtbares Ergebnis speichern und den naechsten konkreten Schritt notieren`,
+      done: false,
+    },
+  ];
+}
+
 function convertBlueprintToBundle(
   blueprint: MasterBlueprintOutput,
   goal: string,
@@ -499,11 +542,11 @@ function convertBlueprintToBundle(
 
   const todoTitle =
     mainStep?.title ||
-    'Nächste Hauptphase starten';
+    `Ersten messbaren Output fuer "${goal}" fertigstellen`;
 
   const habitTitle =
     mainRoutine?.title ||
-    'Wiederkehrenden Fokusblock halten';
+    `Fokusblock fuer "${goal}" absolvieren`;
 
   const systemMap = {
     rootProblem: blueprint.rootProblem,
@@ -552,47 +595,36 @@ function convertBlueprintToBundle(
 
   const executionSteps: PlannerExecutionStep[] = blueprint.executionSteps
     .slice(0, targetStepCount)
-    .map((step, index) => ({
-      id: step.id || `step_${index + 1}`,
-      order: index + 1,
-      title: step.title,
-      explanation: step.explanation,
-      whyItMatters: step.whyItMatters,
-      estimatedDays: step.estimatedDays,
-      checklist: step.checklist.map((item, itemIndex) => ({
-        id: item.id || `c_${index + 1}_${itemIndex + 1}`,
-        label: item.label,
-        done: false,
-      })),
-      linkedTodoTitles: [todoTitle],
-      linkedHabitTitles: [habitTitle],
-    }));
+    .map((step, index) => {
+      const title = isWeakActionText(step.title)
+        ? `${goal}: konkreten Teil-Output ${index + 1} fertigstellen`
+        : step.title;
+      const generatedChecklist = step.checklist
+        .map((item, itemIndex) => ({
+          id: item.id || `c_${index + 1}_${itemIndex + 1}`,
+          label: item.label,
+          done: false,
+        }))
+        .filter((item) => !isWeakActionText(item.label));
 
-  while (executionSteps.length < targetStepCount) {
-    const i = executionSteps.length;
-    executionSteps.push({
-      id: `step_${i + 1}`,
-      order: i + 1,
-      title: `Fortschrittsphase ${i + 1}`,
-      explanation: 'Zusätzliche strukturierte Fortschrittsphase zur Vervollständigung des Zielpfads.',
-      whyItMatters: 'Das Ziel soll vollständig in belastbare Phasen zerlegt bleiben.',
-      estimatedDays: 4,
-      checklist: [
-        {
-          id: `c_${i + 1}_1`,
-          label: 'Phase klar ausführen',
-          done: false,
-        },
-        {
-          id: `c_${i + 1}_2`,
-          label: 'Zwischenergebnis sichern',
-          done: false,
-        },
-      ],
-      linkedTodoTitles: [todoTitle],
-      linkedHabitTitles: [habitTitle],
+      return {
+        id: step.id || `step_${index + 1}`,
+        order: index + 1,
+        title,
+        explanation: isWeakActionText(step.explanation)
+          ? `Arbeite diesen Schritt so ab, dass am Ende ein pruefbares Zwischenergebnis fuer "${goal}" sichtbar ist.`
+          : step.explanation,
+        whyItMatters: isWeakActionText(step.whyItMatters)
+          ? `Dieser Schritt reduziert einen konkreten Engpass und macht den naechsten Schritt fuer "${goal}" leichter.`
+          : step.whyItMatters,
+        estimatedDays: step.estimatedDays,
+        checklist: generatedChecklist.length >= 2
+          ? generatedChecklist
+          : concreteChecklistFor(goal, title, index),
+        linkedTodoTitles: [todoTitle],
+        linkedHabitTitles: [habitTitle],
+      };
     });
-  }
 
   return {
     primary: {
@@ -603,7 +635,7 @@ function convertBlueprintToBundle(
           `Hauptengpass für "${goal}" muss zuerst sauber angegangen werden.`,
         instruction:
           mainStep?.explanation ||
-          'Starte mit der Phase, die den größten Downstream-Hebel hat.',
+          `Lege den kleinsten pruefbaren Output fuer "${goal}" fest und arbeite ihn im naechsten Fokusblock fertig.`,
         expectedEffect:
           'Die Hauptengstelle wird reduziert und spätere Phasen werden leichter.',
       },
@@ -614,19 +646,19 @@ function convertBlueprintToBundle(
           'Ein stabiles wiederkehrendes System trägt die milestone-basierten Phasen.',
         instruction:
           mainRoutine?.reason ||
-          'Wiederhole den Kernblock konsequent und messbar.',
+          `Plane feste Arbeitsbloecke fuer "${goal}" und beende jeden Block mit einem dokumentierten Ergebnis.`,
         expectedEffect:
           'Mehr Konstanz und weniger Zerfall zwischen den Phasen.',
       },
       calendar: {
-        title: mainStep?.title || 'Fokusblock',
+        title: mainStep?.title || `${goal}: konkreter Arbeitsblock`,
         start: nextCalendar.start,
         end: nextCalendar.end,
         reason:
           'Der wichtigste Hebel braucht einen realen Zeitslot statt nur Absicht.',
         instruction:
           mainStep?.explanation ||
-          'Arbeite in diesem Block nur an der aktuell wichtigsten Phase.',
+          `Arbeite in diesem Block nur an dem naechsten sichtbaren Ergebnis fuer "${goal}".`,
       },
       routines,
     },
@@ -647,8 +679,8 @@ function convertBlueprintToBundle(
           : blueprint.graph.nodes.length >= 7
             ? 'advanced'
             : 'moderate',
-      summary: `Blueprint für "${goal}" mit Root Problem, Musterstruktur, Hebeln, Failure Modes und ${targetStepCount} Fortschrittsphasen.`,
-      targetStepCount,
+      summary: `Blueprint für "${goal}" mit Root Problem, Musterstruktur, Hebeln, Failure Modes und ${executionSteps.length} konkreten Handlungsschritten.`,
+      targetStepCount: executionSteps.length,
       coachStyle: 'elite_demanding_precision_problem_tree',
     },
   };
@@ -669,6 +701,18 @@ HARD RULES:
 6. Prefer precision, causal structure and demanding realism over generic advice.
 7. Routines belong in routines, not as shallow standalone steps.
 8. The user is highly demanding and perfectionistic.
+9. Every step title must be specific to the user's goal. Never use placeholder titles like "Fortschrittsphase 4".
+10. Questions and steps must not repeat the same meaning with different words.
+11. Every executionStep.title must start with a concrete action verb and name a deliverable, object, metric, session, document, workout, output, or decision.
+12. Every explanation must say exactly what the user should do in the next session or week.
+13. Every whyItMatters must connect the action to the final goal outcome.
+14. Checklist labels must be physical or digital actions the user can mark done. Never write "Phase umsetzen", "Fortschritt sichern", "Struktur aufbauen", or similar vague labels.
+15. Use time, frequency, output quantity, quality threshold, deadline, or measurement wherever the available answers make that possible.
+16. Use the user's answers, free slots, profile, past goals, and constraints from the user payload. Do not ignore them.
+17. Avoid abstract coaching prose. Prefer "Erstelle X", "Trainiere Y", "Schreibe Z", "Buche A", "Teste B", "Miss C".
+18. Each step needs enough detail that the user can execute it without asking "how exactly?". Include the concrete sub-output, acceptance criteria, and next review point.
+19. For every checklist, include 3-5 items when possible: prepare, execute, measure, document, decide next action.
+20. If the goal is domain-specific, use domain-specific nouns and actions from that domain instead of generic productivity language.
 
 YOU MUST IMPROVE THIS BLUEPRINT, NOT REPLACE IT WITH GENERIC ADVICE:
 ${JSON.stringify(blueprintBundle)}
@@ -728,54 +772,111 @@ JSON SHAPE:
 `.trim();
 }
 
-async function callGroqRaw(params: {
+function adaptiveGoalSystemPrompt(kind: 'analyze' | 'questions' | 'blueprint' | 'learn' | 'regenerate') {
+  const base = `
+You are Kalendulu Adaptive Goal Intelligence.
+Return ONLY valid JSON. No markdown. No prose outside JSON.
+You are not a static form assistant. Analyze goal semantics, quality, missing dimensions, risk, user history and fit.
+Use cheap-model discipline: concise reasoningSummary, strong structure, no long hidden reasoning.
+Emotional, identity and spiritual goals need qualitative markers and reflective routines, not fake hard numbers.
+Fitness, finance, study and business goals need concrete metrics, resources, constraints and next outputs.
+`;
+
+  if (kind === 'analyze') {
+    return `${base}
+Return a GoalDiagnosis JSON with: id, rawGoal, interpretedGoal, domains, primaryDomain, shape, measurability, control, qualityScores 0-1, missingDimensions, riskFlags, recommendedQuestionDepth, shouldAskQuestions, shouldGenerateBlueprint, reasoningSummary.
+Use domains: fitness, health, study, career, business, finance, relationship, emotional, mental_clarity, identity, spiritual, creative, productivity, lifestyle, other.
+Use shape: outcome_goal, process_goal, identity_goal, emotional_state_goal, avoidance_goal, exploration_goal, maintenance_goal, transformation_goal.
+`.trim();
+  }
+
+  if (kind === 'questions') {
+    return `${base}
+Return an AdaptiveQuestionSet JSON. Max 9 questions, usually 3-6.
+Every question must be derived from diagnosis and change the later blueprint.
+Use fields: diagnosisId, introMessage, questions[], canProceedWithoutAnswers, suggestedMode.
+Each question: id, question, whyItMatters, dimension, answerType, options optional, priority 0-100, isRequiredForBlueprint.
+No redundant generic questions.
+`.trim();
+  }
+
+  if (kind === 'blueprint') {
+    return `${base}
+Return a GoalBlueprint JSON. Build a dynamic goal system with successDefinition, strategy, phases, milestones, routines, steps, calendarBlocks, progressMetrics, firstAction, reviewSystem, personalizationNotes, userFacingSummary <= 1800 chars.
+All routines need reason and failureFallback. All steps need canBeRegenerated=true where useful.
+For emotional goals: qualitative indicators, trigger observation, reflection, gentle routines.
+For operational goals: concrete metrics, outputs, time blocks, weekly reviews.
+`.trim();
+  }
+
+  if (kind === 'learn') {
+    return `${base}
+Return a UserGoalLearningProfile JSON. Store only abstract patterns, not sensitive details.
+Learn from skipped/completed/refreshed feedback. Update planningStyle, routine duration, failure patterns and domain preferences.
+`.trim();
+  }
+
+  return `${base}
+Return a RegenerationResult JSON. Change only requested target.
+too_hard/low_completion: smaller and easier. too_easy: slightly stronger. too_vague: concrete verb + measurable output. boring: more attractive. time_conflict: shorter/movable. not_relevant: closer to refinedGoal.
+Fields: targetType, replacedTargetId optional, explanation, newItems, updatedBlueprint optional.
+`.trim();
+}
+
+async function runAdaptiveGoalEndpoint(params: {
+  kind: 'analyze' | 'questions' | 'blueprint' | 'learn' | 'regenerate';
+  body: Record<string, unknown>;
+  env: Env;
+}) {
+  const rawGoal = safeString(params.body.rawGoal || params.body.goal || '');
+  const difficultyLevel = clamp(safeNumber(params.body.difficultyLevel, rawGoal.length > 80 ? 7 : 4), 1, 10);
+  const targetCount =
+    params.kind === 'blueprint'
+      ? stepCountForDifficulty(difficultyLevel)
+      : params.kind === 'questions'
+        ? 6
+        : 3;
+  const selectedModel = selectOpenAiModel({
+    purpose: params.kind === 'blueprint' ? 'plan' : 'refine',
+    difficultyLevel,
+    targetCount,
+    env: params.env,
+  });
+
+  const raw = await callPlannerModelRaw({
+    env: params.env,
+    model: selectedModel.model,
+    system: adaptiveGoalSystemPrompt(params.kind),
+    user: JSON.stringify({
+      ...params.body,
+      modelRouting: selectedModel.reason,
+      generatedAt: new Date().toISOString(),
+    }),
+    maxCompletionTokens:
+      params.kind === 'blueprint'
+        ? Math.max(selectedModel.maxCompletionTokens, 5200)
+        : selectedModel.maxCompletionTokens,
+  });
+
+  return parseModelJsonLoose<unknown>(raw);
+}
+
+async function callPlannerModelRaw(params: {
   env: Env;
   model: string;
   system: string;
   user: string;
   temperature?: number;
   maxCompletionTokens?: number;
-  forceJson?: boolean;
 }) {
-  const body: Record<string, unknown> = {
+  return callOpenAiJsonText({
+    apiKey: params.env.OPENAI_API_KEY,
     model: params.model,
-    temperature: params.temperature ?? 0.2,
-    max_completion_tokens: params.maxCompletionTokens ?? 3800,
-    messages: [
-      { role: 'system', content: params.system },
-      { role: 'user', content: params.user },
-    ],
-  };
-
-  if (params.forceJson) {
-    body.response_format = { type: 'json_object' };
-  }
-
-  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${params.env.GROQ_API_KEY}`,
-    },
-    body: JSON.stringify(body),
+    system: params.system,
+    user: params.user,
+    temperature: params.temperature,
+    maxCompletionTokens: params.maxCompletionTokens,
   });
-
-  const raw = await res.text();
-
-  if (!res.ok) {
-    throw new Error(`Groq error ${res.status}: ${raw}`);
-  }
-
-  const parsed = JSON.parse(raw) as {
-    choices?: Array<{ message?: { content?: string } }>;
-  };
-
-  const content = parsed.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error('Groq returned empty content.');
-  }
-
-  return content;
 }
 
 function buildFallbackRefinement(goal: string, difficultyLevel: number): GoalRefinementResponse {
@@ -835,18 +936,70 @@ function buildFallbackRefinement(goal: string, difficultyLevel: number): GoalRef
     },
   ];
 
-  while (baseQuestions.length < count) {
-    const index = baseQuestions.length + 1;
-    baseQuestions.push({
-      id: `extra_${index}`,
-      title: `Zusatzfrage ${index}: Welche Detailinformation fehlt noch, damit das Ziel als Problembaum modelliert werden kann?`,
+  const extraQuestions: GoalQuestion[] = [
+    {
+      id: 'success_metric',
+      title: 'Woran erkennst du messbar, dass dieses Ziel wirklich erreicht ist?',
       type: 'text',
       required: true,
-      section: 'Vertiefung',
-      whyAsked: 'Komplexe Ziele brauchen Präzision auf Unterproblem-Ebene.',
-      priority: Math.max(1, 10 - index),
-      placeholder: 'Kurze, konkrete Antwort',
-    });
+      section: 'Messung',
+      whyAsked: 'Der Plan braucht ein klares Erfolgskriterium statt nur ein Gefühl.',
+      priority: 7,
+      placeholder: 'z. B. Zahl, Abgabe, Ergebnis, Niveau, sichtbarer Output',
+    },
+    {
+      id: 'available_days',
+      title: 'An welchen Tagen kannst du realistisch daran arbeiten?',
+      type: 'multi_choice',
+      required: true,
+      section: 'Zeit',
+      whyAsked: 'Kalenderblöcke müssen zu deinem echten Wochenrhythmus passen.',
+      priority: 7,
+      options: [
+        { id: 'mon', label: 'Montag' },
+        { id: 'tue', label: 'Dienstag' },
+        { id: 'wed', label: 'Mittwoch' },
+        { id: 'thu', label: 'Donnerstag' },
+        { id: 'fri', label: 'Freitag' },
+        { id: 'sat', label: 'Samstag' },
+        { id: 'sun', label: 'Sonntag' },
+      ],
+    },
+    {
+      id: 'failure_pattern',
+      title: 'Woran sind ähnliche Ziele bei dir bisher gescheitert?',
+      type: 'long_text',
+      required: true,
+      section: 'Risiko',
+      whyAsked: 'Wiederkehrende Scheitermuster sind wichtiger als generische Motivation.',
+      priority: 6,
+      placeholder: 'Beschreibe typische Auslöser, Abbrüche oder Ablenkungen.',
+    },
+    {
+      id: 'first_constraint',
+      title: 'Welche Einschränkung darf der Plan auf keinen Fall ignorieren?',
+      type: 'long_text',
+      required: true,
+      section: 'Grenzen',
+      whyAsked: 'Ein Plan ist nur brauchbar, wenn er echte Grenzen respektiert.',
+      priority: 6,
+      placeholder: 'z. B. Arbeit, Gesundheit, Budget, Energie, Familie, Skills',
+    },
+    {
+      id: 'minimum_viable_progress',
+      title: 'Was wäre der kleinste Fortschritt, der diese Woche schon zählen würde?',
+      type: 'text',
+      required: true,
+      section: 'Start',
+      whyAsked: 'Der erste Schritt muss klein genug sein, um wirklich zu passieren.',
+      priority: 5,
+      placeholder: 'Ein konkretes Ergebnis für die nächsten 7 Tage.',
+    },
+  ];
+
+  for (const question of extraQuestions) {
+    if (baseQuestions.length >= count) break;
+    baseQuestions.push(question);
   }
 
   return {
@@ -941,6 +1094,27 @@ function buildSignalsFromBody(body: Record<string, unknown>) {
     }
   }
 
+  const goalLearningProfile = (body.goalLearningProfile ?? {}) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(goalLearningProfile)) {
+    if (
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      signals.push({
+        key: `goal_learning_${key}`,
+        value,
+        confidence: 0.8,
+      });
+    } else if (Array.isArray(value) && value.length) {
+      signals.push({
+        key: `goal_learning_${key}`,
+        value: value.slice(0, 8).join(', '),
+        confidence: 0.76,
+      });
+    }
+  }
+
   return signals;
 }
 
@@ -950,54 +1124,76 @@ function normalizePlannerBundle(
 ): PlannerBundle {
   const normalizedSteps = ensureArray<PlannerExecutionStep>(bundle.executionSteps)
     .slice(0, targetStepCount)
-    .map((step, index) => ({
-      id: step.id || `step_${index + 1}`,
-      order: index + 1,
-      title: step.title,
-      explanation: step.explanation,
-      whyItMatters: step.whyItMatters,
-      estimatedDays: step.estimatedDays,
-      checklist: ensureArray<PlannerExecutionChecklistItem>(step.checklist)
+    .filter((step) => !/^fortschrittsphase\s+\d+$/i.test(step.title.trim()))
+    .map((step, index) => {
+      const title = isWeakActionText(step.title)
+        ? `Konkreten Teil-Output ${index + 1} fertigstellen`
+        : step.title;
+      const checklist = ensureArray<PlannerExecutionChecklistItem>(step.checklist)
         .slice(0, 4)
         .map((item, itemIndex) => ({
           id: item.id || `c_${index + 1}_${itemIndex + 1}`,
           label: item.label,
           done: false,
-        })),
-      linkedTodoTitles: ensureArray<string>(step.linkedTodoTitles),
-      linkedHabitTitles: ensureArray<string>(step.linkedHabitTitles),
-    }));
+        }))
+        .filter((item) => !isWeakActionText(item.label));
 
-  while (normalizedSteps.length < targetStepCount) {
-    const index = normalizedSteps.length;
-    normalizedSteps.push({
-      id: `step_${index + 1}`,
-      order: index + 1,
-      title: `Fortschrittsphase ${index + 1}`,
-      explanation:
-        'Zusätzliche klare Umsetzungsphase zur vollständigen Zielkette.',
-      whyItMatters:
-        'Das Ziel soll in belastbare Phasen statt in weiche Tipps zerlegt bleiben.',
-      estimatedDays: 4,
-      checklist: [
-        { id: `c_${index + 1}_1`, label: 'Kernaufgabe der Phase durchführen', done: false },
-        { id: `c_${index + 1}_2`, label: 'Zwischenergebnis sichern', done: false },
-      ],
-      linkedTodoTitles: [bundle.primary.todo.title],
-      linkedHabitTitles: [bundle.primary.habit.title],
+      return {
+        id: step.id || `step_${index + 1}`,
+        order: index + 1,
+        title,
+        explanation: isWeakActionText(step.explanation)
+          ? 'Arbeite diesen Schritt so ab, dass am Ende ein pruefbares Ergebnis sichtbar ist.'
+          : step.explanation,
+        whyItMatters: isWeakActionText(step.whyItMatters)
+          ? 'Dieser Schritt entfernt einen konkreten Engpass und macht den naechsten Schritt leichter.'
+          : step.whyItMatters,
+        estimatedDays: step.estimatedDays,
+        checklist: checklist.length >= 2
+          ? checklist
+          : concreteChecklistFor('dein Ziel', title, index),
+        linkedTodoTitles: ensureArray<string>(step.linkedTodoTitles),
+        linkedHabitTitles: ensureArray<string>(step.linkedHabitTitles),
+      };
     });
-  }
 
   return {
     ...bundle,
     executionSteps: normalizedSteps,
+    planMeta: {
+      ...bundle.planMeta,
+      targetStepCount: normalizedSteps.length,
+    },
   };
 }
 
-function validateSecret(request: Request, env: Env) {
-  if (!env.APP_SHARED_SECRET) return true;
-  const headerSecret = request.headers.get('X-App-Secret');
-  return headerSecret === env.APP_SHARED_SECRET;
+async function requireAuthenticatedUser(request: Request, env: Env) {
+  const authHeader = request.headers.get('Authorization') ?? '';
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  const accessToken = match?.[1];
+
+  if (!accessToken) {
+    throw new Error('Missing bearer token');
+  }
+
+  const res = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      apikey: env.SUPABASE_PUBLISHABLE_KEY,
+    },
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Invalid bearer token: Supabase returned ${res.status} ${body.slice(0, 180)}`);
+  }
+
+  const user = (await res.json()) as { id?: string; email?: string };
+  if (!user.id) {
+    throw new Error('Invalid authenticated user payload');
+  }
+
+  return user;
 }
 
 export default {
@@ -1006,22 +1202,71 @@ export default {
       return jsonResponse({ ok: true });
     }
 
-    if (!validateSecret(request, env)) {
-      return errorResponse('Unauthorized', 401);
-    }
-
     const url = new URL(request.url);
 
     try {
       if (request.method === 'GET' && url.pathname === '/health') {
-        return jsonResponse({ ok: true });
+        return jsonResponse({
+          ok: true,
+          worker: 'kalendulu-planner',
+          supabaseHost: new URL(env.SUPABASE_URL).host,
+          hasSupabaseKey: Boolean(env.SUPABASE_PUBLISHABLE_KEY),
+          hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
+        });
       }
 
       if (request.method !== 'POST') {
         return errorResponse('Method not allowed', 405);
       }
 
+      let authUser: { id?: string; email?: string };
+      try {
+        authUser = await requireAuthenticatedUser(request, env);
+      } catch (error: any) {
+        return errorResponse('Unauthorized', 401, {
+          authDebug: error?.message ?? 'Unknown auth error',
+          supabaseHost: (() => {
+            try {
+              return new URL(env.SUPABASE_URL).host;
+            } catch {
+              return 'invalid_supabase_url';
+            }
+          })(),
+        });
+      }
+
       const body = (await request.json()) as Record<string, unknown>;
+
+      const adaptivePrefix = '/api/ai/adaptive-goal/';
+      if (url.pathname.startsWith(adaptivePrefix)) {
+        const kind = url.pathname.slice(adaptivePrefix.length);
+        if (
+          kind === 'analyze' ||
+          kind === 'questions' ||
+          kind === 'blueprint' ||
+          kind === 'learn' ||
+          kind === 'regenerate'
+        ) {
+          try {
+            const generated = await runAdaptiveGoalEndpoint({
+              kind,
+              body: {
+                ...body,
+                userId: authUser.id,
+              },
+              env,
+            });
+
+            if (!generated || typeof generated !== 'object') {
+              return errorResponse('Adaptive Goal model returned invalid JSON.', 502);
+            }
+
+            return jsonResponse(generated);
+          } catch (error: any) {
+            return errorResponse(error?.message ?? 'Adaptive Goal request failed.', 502);
+          }
+        }
+      }
 
       if (url.pathname === '/goal/refine') {
         const goal = safeString(body.goal).trim();
@@ -1042,17 +1287,23 @@ export default {
           pastGoals: ensureArray(body.pastGoals),
           profile: body.profile ?? {},
           existingAnswers: body.existingAnswers ?? {},
+          userId: authUser.id,
         });
 
         try {
-          const raw = await callGroqRaw({
+          const selectedModel = selectOpenAiModel({
+            purpose: 'refine',
+            difficultyLevel,
+            targetCount: targetQuestionCount,
             env,
-            model: env.GROQ_MODEL_REFINE || 'llama-3.3-70b-versatile',
+          });
+
+          const raw = await callPlannerModelRaw({
+            env,
+            model: selectedModel.model,
             system,
             user,
-            temperature: 0.15,
-            maxCompletionTokens: 3000,
-            forceJson: true,
+            maxCompletionTokens: selectedModel.maxCompletionTokens,
           });
 
           const parsed = parseModelJsonLoose<GoalRefinementResponse>(raw);
@@ -1134,18 +1385,26 @@ export default {
             freeSlots: body.freeSlots ?? [],
             answers: body.answers ?? {},
             userPlanningProfile: body.userPlanningProfile ?? {},
+            goalLearningProfile: body.goalLearningProfile ?? {},
             pastGoals: body.goals ?? [],
             deterministicBlueprint: deterministicBundle,
+            userId: authUser.id,
           });
 
-          const raw = await callGroqRaw({
+          const selectedModel = selectOpenAiModel({
+            purpose: 'plan',
+            difficultyLevel,
+            targetCount: targetStepCount,
+            signalCount: signals.length,
             env,
-            model: env.GROQ_MODEL_PLAN || 'llama-3.3-70b-versatile',
+          });
+
+          const raw = await callPlannerModelRaw({
+            env,
+            model: selectedModel.model,
             system,
             user,
-            temperature: 0.1,
-            maxCompletionTokens: 4200,
-            forceJson: true,
+            maxCompletionTokens: selectedModel.maxCompletionTokens,
           });
 
           const parsed = parseModelJsonLoose<PlannerBundle>(raw);
@@ -1181,8 +1440,7 @@ export default {
                 deterministicBundle.planMeta?.summary,
               targetStepCount,
               coachStyle:
-                parsed.planMeta?.coachStyle ??
-                deterministicBundle.planMeta?.coachStyle,
+                `${parsed.planMeta?.coachStyle ?? deterministicBundle.planMeta?.coachStyle}__${selectedModel.reason}`,
             },
           };
 

@@ -1,8 +1,12 @@
 {
   "name": "kalendulu-planner",
   "main": "src/index.ts",
-  "compatibility_date": "2026-03-06",
-  "ai": {
-    "binding": "AI"
+  "compatibility_date": "2026-03-01",
+  "vars": {
+    "OPENAI_MODEL_CHEAP": "gpt-5-nano",
+    "OPENAI_MODEL_BALANCED": "gpt-5-mini",
+    "OPENAI_MODEL_STRONG": "gpt-5",
+    "SUPABASE_URL": "https://poupgnhlapvgoeeqjbbe.supabase.co",
+    "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_m3tYbzYlg3UEwK81EvWZTw_de0W8iNy"
   }
 }

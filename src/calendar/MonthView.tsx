@@ -5,6 +5,8 @@ import 'dayjs/locale/de';
 
 import type { CalEvent } from './types';
 import { useAppTheme } from '../theme/ThemeProvider';
+import { getHolidayName } from './holidays';
+import type { HolidayCountryCode } from '../settings/appSettings';
 
 dayjs.locale('de');
 
@@ -13,6 +15,9 @@ type Props = {
   onSelectDay: (d: Date) => void;
   events?: CalEvent[];
   selectedDate?: Date;
+  holidayCountry?: HolidayCountryCode;
+  showHolidays?: boolean;
+  showSundays?: boolean;
 };
 
 function normalizeMonthGridStart(month: dayjs.Dayjs) {
@@ -34,65 +39,21 @@ function getThemedEventColor(
   return eventPalette[colorIndex % eventPalette.length] ?? fallback;
 }
 
-function getEasterSunday(year: number) {
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31);
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-
-  return dayjs(new Date(year, month - 1, day));
-}
-
-function getAustriaHolidayName(date: dayjs.Dayjs) {
-  const year = date.year();
-  const easterSunday = getEasterSunday(year);
-
-  const holidays: Record<string, string> = {
-    [`${year}-01-01`]: 'Neujahr',
-    [`${year}-01-06`]: 'Drei Könige',
-    [`${year}-05-01`]: 'Staatsfeiertag',
-    [`${year}-08-15`]: 'Mariä Himmelfahrt',
-    [`${year}-10-26`]: 'Nationalfeiertag',
-    [`${year}-11-01`]: 'Allerheiligen',
-    [`${year}-12-08`]: 'Mariä Empfängnis',
-    [`${year}-12-25`]: 'Christtag',
-    [`${year}-12-26`]: 'Stefanitag',
-    [easterSunday.subtract(2, 'day').format('YYYY-MM-DD')]: 'Karfreitag',
-    [easterSunday.format('YYYY-MM-DD')]: 'Ostern',
-    [easterSunday.add(1, 'day').format('YYYY-MM-DD')]: 'Ostermontag',
-    [easterSunday.add(39, 'day').format('YYYY-MM-DD')]: 'Himmelfahrt',
-    [easterSunday.add(49, 'day').format('YYYY-MM-DD')]: 'Pfingsten',
-    [easterSunday.add(50, 'day').format('YYYY-MM-DD')]: 'Pfingstmontag',
-    [easterSunday.add(60, 'day').format('YYYY-MM-DD')]: 'Fronleichnam',
-  };
-
-  return holidays[date.format('YYYY-MM-DD')] ?? null;
-}
-
 export default function MonthView({
   monthDate,
   onSelectDay,
   events = [],
   selectedDate,
+  holidayCountry = 'AT',
+  showHolidays = true,
+  showSundays = true,
 }: Props) {
   const { colors, fontFamily, eventPalette } = useAppTheme();
   const styles = useMemo(() => createStyles(colors, fontFamily), [colors, fontFamily]);
 
   const month = dayjs(monthDate).startOf('month');
   const selected = selectedDate ? dayjs(selectedDate) : null;
-
   const weekDays = useMemo(() => ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'], []);
-
   const cells = useMemo(() => {
     const gridStart = normalizeMonthGridStart(month);
     return Array.from({ length: 42 }, (_, i) => gridStart.add(i, 'day'));
@@ -102,10 +63,7 @@ export default function MonthView({
     <View style={styles.wrap}>
       <View style={styles.weekHeader}>
         {weekDays.map((w) => (
-          <Text
-            key={w}
-            style={[styles.weekHeaderText, w === 'So' && styles.weekHeaderSunday]}
-          >
+          <Text key={w} style={[styles.weekHeaderText, w === 'So' && styles.weekHeaderSunday]}>
             {w}
           </Text>
         ))}
@@ -117,8 +75,7 @@ export default function MonthView({
           const isToday = d.isSame(dayjs(), 'day');
           const isSunday = d.day() === 0;
           const isSelected = selected ? d.isSame(selected, 'day') : false;
-          const holidayName = getAustriaHolidayName(d);
-
+          const holidayName = showHolidays ? getHolidayName(d, holidayCountry) : null;
           const dayEvents = events
             .filter((event) => dayjs(event.start).isSame(d, 'day'))
             .sort((a, b) => dayjs(a.start).valueOf() - dayjs(b.start).valueOf());
@@ -139,7 +96,7 @@ export default function MonthView({
                   style={[
                     styles.cellText,
                     !inMonth && styles.outMonthText,
-                    isSunday && inMonth && styles.sundayText,
+                    showSundays && isSunday && inMonth && styles.sundayText,
                     holidayName && inMonth && styles.holidayText,
                     isToday && styles.todayText,
                     isSelected && styles.selectedText,
@@ -151,22 +108,22 @@ export default function MonthView({
 
               <View style={styles.indicatorArea}>
                 {holidayName ? <View style={styles.holidayBar} /> : null}
-
                 <View style={styles.dotRow}>
-                  {dayEvents.slice(0, 3).map((event, index) => {
-                    const themedEventColor = getThemedEventColor(
-                      event.colorIndex,
-                      eventPalette,
-                      colors.primary,
-                    );
-
-                    return (
-                      <View
-                        key={`${event.id}_${index}`}
-                        style={[styles.eventDot, { backgroundColor: themedEventColor }]}
-                      />
-                    );
-                  })}
+                  {dayEvents.slice(0, 3).map((event, index) => (
+                    <View
+                      key={`${event.id}_${index}`}
+                      style={[
+                        styles.eventDot,
+                        {
+                          backgroundColor: getThemedEventColor(
+                            event.colorIndex,
+                            eventPalette,
+                            colors.primary,
+                          ),
+                        },
+                      ]}
+                    />
+                  ))}
                 </View>
 
                 {dayEvents.length > 3 ? (
@@ -183,12 +140,10 @@ export default function MonthView({
 
 function createStyles(
   colors: ReturnType<typeof useAppTheme>['colors'],
-  fontFamily: ReturnType<typeof useAppTheme>['fontFamily']
+  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'],
 ) {
   return StyleSheet.create({
-    wrap: {
-      width: '100%',
-    },
+    wrap: { width: '100%' },
     weekHeader: {
       flexDirection: 'row',
       justifyContent: 'space-between',
@@ -203,9 +158,7 @@ function createStyles(
       fontSize: 10,
       fontFamily: fontFamily.bold,
     },
-    weekHeaderSunday: {
-      color: colors.danger,
-    },
+    weekHeaderSunday: { color: colors.danger },
     grid: {
       flexDirection: 'row',
       flexWrap: 'wrap',
@@ -246,22 +199,14 @@ function createStyles(
       color: colors.text,
       fontFamily: fontFamily.bold,
     },
-    sundayText: {
-      color: colors.danger,
-    },
-    holidayText: {
-      color: colors.danger,
-    },
+    sundayText: { color: colors.danger },
+    holidayText: { color: colors.danger },
     outMonthText: {
       color: colors.textMuted,
       opacity: 0.45,
     },
-    todayText: {
-      color: colors.primary,
-    },
-    selectedText: {
-      color: colors.primary,
-    },
+    todayText: { color: colors.primary },
+    selectedText: { color: colors.primary },
     indicatorArea: {
       flex: 1,
       alignItems: 'center',

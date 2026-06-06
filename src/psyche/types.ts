@@ -60,7 +60,7 @@ export type TodoLikeTask = {
 
 export type TodoStateLike = {
   name?: string;
-  categories?: Array<{ id: string; name: string; color: string }>;
+  categories?: { id: string; name: string; color: string }[];
   tasks: TodoLikeTask[];
   [key: string]: unknown;
 };
@@ -423,13 +423,13 @@ export type PlannerBundle = {
     };
     [key: string]: unknown;
   };
-  alternatives?: Array<{
+  alternatives?: {
     label: string;
     todo: PlannerReasonedText;
     habit: PlannerReasonedText;
     calendar: PlannerCalendarBlock;
     [key: string]: unknown;
-  }>;
+  }[];
   executionSteps: PlannerExecutionStep[];
   suggestions?:
     | {
@@ -473,9 +473,9 @@ export type GoalMiniStep = {
 export type GoalExecutionPlan = {
   summary?: string;
   intensityPreset?: GoalIntensityPreset;
-  todos?: Array<PsycheSuggestedTodo | GoalTodoPlan>;
-  habits?: Array<PsycheSuggestedHabit | GoalHabitPlan>;
-  calendarBlocks?: Array<PsycheSuggestedCalendarBlock | GoalCalendarBlockPlan>;
+  todos?: (PsycheSuggestedTodo | GoalTodoPlan)[];
+  habits?: (PsycheSuggestedHabit | GoalHabitPlan)[];
+  calendarBlocks?: (PsycheSuggestedCalendarBlock | GoalCalendarBlockPlan)[];
   steps?: PlannerExecutionStep[];
   sourceBundle?: PlannerBundle;
   metrics?: GoalMetric[];

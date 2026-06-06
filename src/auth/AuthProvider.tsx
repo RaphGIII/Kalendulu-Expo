@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 
 import { supabase } from '@/src/lib/supabase';
+import { DEV_AUTH_BYPASS } from '@/src/config/auth';
 
 type RegisterInput = {
   email: string;
@@ -27,6 +28,18 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const devBypassUser = {
+  id: 'dev-user',
+  email: 'dev@kalendulu.local',
+  user_metadata: {
+    full_name: 'Dev Tester',
+    name: 'Dev Tester',
+  },
+  app_metadata: {
+    provider: 'dev-bypass',
+  },
+} as unknown as User;
+
 async function fetchProfileName(userId: string): Promise<string> {
   const { data, error } = await supabase
     .from('profiles')
@@ -46,9 +59,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [fullName, setFullName] = useState('');
 
-  const user = session?.user ?? null;
+  const user = DEV_AUTH_BYPASS ? devBypassUser : session?.user ?? null;
 
-  const refreshProfile = async () => {
+  const refreshProfile = useCallback(async () => {
+    if (DEV_AUTH_BYPASS) {
+      setFullName('Dev Tester');
+      return;
+    }
+
     if (!user?.id) {
       setFullName('');
       return;
@@ -61,10 +79,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       '';
 
     setFullName(profileName || fallbackName || '');
-  };
+  }, [user]);
 
   useEffect(() => {
     let mounted = true;
+
+    if (DEV_AUTH_BYPASS) {
+      if (mounted) {
+        setSession(null);
+        setFullName('Dev Tester');
+        setAuthReady(true);
+      }
+      return () => {
+        mounted = false;
+      };
+    }
 
     const bootstrap = async () => {
       const { data } = await supabase.auth.getSession();
@@ -83,6 +112,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           '';
 
         setFullName(profileName || fallbackName || '');
+      } else {
+        setFullName('');
       }
 
       if (mounted) {
@@ -124,6 +155,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signIn = async ({ email, password }: LoginInput) => {
+    if (DEV_AUTH_BYPASS) return;
+
     const { error } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
@@ -135,10 +168,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const signUp = async ({ email, password, fullName }: RegisterInput) => {
+    if (DEV_AUTH_BYPASS) return;
+
     const trimmedEmail = email.trim();
     const trimmedName = fullName.trim();
 
-    const { data, error } = await supabase.auth.signUp({
+    const { error } = await supabase.auth.signUp({
       email: trimmedEmail,
       password,
       options: {
@@ -151,11 +186,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error) {
       throw new Error(error.message);
     }
-
-    
   };
 
   const signOut = async () => {
+    if (DEV_AUTH_BYPASS) return;
+
     const { error } = await supabase.auth.signOut();
 
     if (error) {
@@ -168,13 +203,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       authReady,
       session,
       user,
-      fullName,
+      fullName: DEV_AUTH_BYPASS ? 'Dev Tester' : fullName,
       signIn,
       signUp,
       signOut,
       refreshProfile,
     }),
-    [authReady, session, user, fullName]
+    [authReady, session, user, fullName, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

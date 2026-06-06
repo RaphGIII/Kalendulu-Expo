@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loadCloudState, saveCloudState } from '../shared/cloudState';
 
 import {
   PlannerBundle,
@@ -22,6 +23,9 @@ type LegacyStoredGoalPlan = {
 
 export async function loadPsycheSettings(): Promise<PsycheSettings | null> {
   try {
+    const cloud = await loadCloudState<PsycheSettings>(SETTINGS_KEY);
+    if (cloud) return cloud;
+
     const raw = await AsyncStorage.getItem(SETTINGS_KEY);
     if (!raw) return null;
     return JSON.parse(raw) as PsycheSettings;
@@ -33,6 +37,7 @@ export async function loadPsycheSettings(): Promise<PsycheSettings | null> {
 export async function savePsycheSettings(settings: PsycheSettings) {
   try {
     await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    await saveCloudState(SETTINGS_KEY, settings);
   } catch {
     // ignore
   }
@@ -40,6 +45,9 @@ export async function savePsycheSettings(settings: PsycheSettings) {
 
 export async function loadPsycheHistory(): Promise<PsycheDailySnapshot[]> {
   try {
+    const cloud = await loadCloudState<PsycheDailySnapshot[]>(HISTORY_KEY);
+    if (cloud) return cloud;
+
     const raw = await AsyncStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
     return JSON.parse(raw) as PsycheDailySnapshot[];
@@ -51,6 +59,7 @@ export async function loadPsycheHistory(): Promise<PsycheDailySnapshot[]> {
 export async function savePsycheHistory(items: PsycheDailySnapshot[]) {
   try {
     await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(items));
+    await saveCloudState(HISTORY_KEY, items);
   } catch {
     // ignore
   }
@@ -58,6 +67,9 @@ export async function savePsycheHistory(items: PsycheDailySnapshot[]) {
 
 export async function loadPsycheGoals(): Promise<PsycheGoal[]> {
   try {
+    const cloud = await loadCloudState<PsycheGoal[]>(GOALS_KEY);
+    if (Array.isArray(cloud)) return cloud;
+
     const raw = await AsyncStorage.getItem(GOALS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -86,6 +98,7 @@ export async function savePsycheGoals(goals: PsycheGoal[]) {
       LEGACY_PLAN_STORAGE_KEY,
       JSON.stringify(toLegacyStoredPlans(goals)),
     );
+    await saveCloudState(GOALS_KEY, goals);
   } catch {
     // ignore
   }

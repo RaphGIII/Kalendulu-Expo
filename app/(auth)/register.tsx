@@ -48,8 +48,8 @@ export default function RegisterScreen() {
       return;
     }
 
-    if (password.length < 6) {
-      Alert.alert('Passwort zu kurz', 'Das Passwort sollte mindestens 6 Zeichen haben.');
+    if (password.length < 8) {
+      Alert.alert('Passwort zu kurz', 'Das Passwort sollte mindestens 8 Zeichen haben.');
       return;
     }
 
@@ -156,7 +156,7 @@ export default function RegisterScreen() {
                   <TextInput
                     value={password}
                     onChangeText={setPassword}
-                    placeholder="Mindestens 6 Zeichen"
+                    placeholder="Mindestens 8 Zeichen"
                     placeholderTextColor="#91A0BB"
                     secureTextEntry
                     style={styles.input}

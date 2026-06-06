@@ -12,6 +12,17 @@ import {
   ThemeDefinition,
 } from './themes';
 
+const distinctEventPalette = [
+  '#2563EB',
+  '#DC2626',
+  '#16A34A',
+  '#F59E0B',
+  '#7C3AED',
+  '#0891B2',
+  '#DB2777',
+  '#65A30D',
+];
+
 type ThemeMode = 'preset' | 'custom';
 
 type SavedThemeSettings = {
@@ -111,12 +122,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         name: settings.customTheme.name || 'Mein Design',
         colors: settings.customTheme.colors,
         accentPalette: getThemeById(settings.selectedThemeId).accentPalette,
-        eventPalette: getThemeById(settings.selectedThemeId).eventPalette,
+        eventPalette: distinctEventPalette,
         habitPalette: getThemeById(settings.selectedThemeId).habitPalette,
       };
     }
 
-    return getThemeById(settings.selectedThemeId);
+    const preset = getThemeById(settings.selectedThemeId);
+    return {
+      ...preset,
+      eventPalette: distinctEventPalette,
+    };
   }, [settings]);
 
   const fontFamily = useMemo(() => {

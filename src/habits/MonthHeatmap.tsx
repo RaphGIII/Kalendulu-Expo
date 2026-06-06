@@ -27,7 +27,7 @@ export default function MonthHeatmap({
     const startWeekday = (start.day() + 6) % 7; // 0..6 where 0=Mon
     const daysInMonth = end.date();
 
-    const cells: Array<{ key: string; day: number | null; value: number }> = [];
+    const cells: { key: string; day: number | null; value: number }[] = [];
 
     // leading blanks
     for (let i = 0; i < startWeekday; i++) cells.push({ key: `b-${i}`, day: null, value: 0 });

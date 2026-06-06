@@ -1,12 +1,13 @@
 import {
   GoalAnswerMap,
+  GoalCategory,
+  GoalQuestion,
   GoalRefinementResponse,
   PsycheGoal,
   UserPlanningProfile,
 } from './types';
-
-const API_URL = process.env.EXPO_PUBLIC_PLANNER_API_URL;
-const APP_SECRET = process.env.EXPO_PUBLIC_APP_SHARED_SECRET;
+import { analyzeGoal, generateAdaptiveQuestions, getUserGoalLearningProfile } from '../ai/adaptiveGoal';
+import type { AdaptiveQuestion, GoalDomain } from '../ai/adaptiveGoal';
 
 type RefinementRequest = {
   goal: string;
@@ -17,58 +18,120 @@ type RefinementRequest = {
   existingAnswers?: GoalAnswerMap;
 };
 
-function isGoalQuestionType(value: unknown) {
-  return (
-    value === 'text' ||
-    value === 'single_choice' ||
-    value === 'multi_choice' ||
-    value === 'long_text'
+function answerMapToStrings(answers?: GoalAnswerMap) {
+  if (!answers) return undefined;
+  return Object.fromEntries(
+    Object.entries(answers).map(([key, value]) => [
+      key,
+      Array.isArray(value) ? value.join(', ') : value,
+    ]),
   );
 }
 
-function isGoalRefinementResponse(value: any): value is GoalRefinementResponse {
-  return (
-    value &&
-    typeof value.goalLabel === 'string' &&
-    typeof value.goalType === 'string' &&
-    Array.isArray(value.questions) &&
-    value.questions.every(
-      (q: any) =>
-        q &&
-        typeof q.id === 'string' &&
-        typeof q.title === 'string' &&
-        isGoalQuestionType(q.type) &&
-        typeof q.required === 'boolean',
-    )
-  );
+function mapGoalDomain(domain: GoalDomain): GoalCategory {
+  switch (domain) {
+    case 'fitness':
+      return 'fitness';
+    case 'health':
+      return 'health';
+    case 'study':
+      return 'study';
+    case 'career':
+      return 'career';
+    case 'business':
+    case 'finance':
+      return 'business';
+    case 'creative':
+      return 'creative';
+    case 'productivity':
+    case 'identity':
+    case 'emotional':
+    case 'mental_clarity':
+    case 'spiritual':
+      return 'mindset';
+    default:
+      return 'other';
+  }
+}
+
+function mapQuestionType(question: AdaptiveQuestion): GoalQuestion['type'] {
+  switch (question.answerType) {
+    case 'single_choice':
+      return 'single_choice';
+    case 'multi_choice':
+      return 'multi_choice';
+    case 'number':
+    case 'date':
+    case 'scale':
+      return 'text';
+    default:
+      return 'long_text';
+  }
+}
+
+function mapQuestion(question: AdaptiveQuestion): GoalQuestion {
+  return {
+    id: question.id,
+    title: question.question,
+    type: mapQuestionType(question),
+    required: question.isRequiredForBlueprint,
+    section: question.dimension,
+    whyAsked: question.whyItMatters,
+    priority: question.priority,
+    helpText: question.whyItMatters,
+    placeholder:
+      question.answerType === 'number'
+        ? 'Zahl eingeben'
+        : question.answerType === 'date'
+          ? 'YYYY-MM-DD'
+          : undefined,
+    options: question.options?.map((label, index) => ({
+      id: `${question.id}_${index + 1}`,
+      label,
+    })),
+  };
 }
 
 export async function fetchGoalRefinement(
   input: RefinementRequest,
 ): Promise<GoalRefinementResponse> {
-  if (!API_URL) {
-    throw new Error('Planner API URL missing');
-  }
-
-  const res = await fetch(`${API_URL}/goal/refine`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(APP_SECRET ? { 'X-App-Secret': APP_SECRET } : {}),
-    },
-    body: JSON.stringify(input),
+  const learningProfile = await getUserGoalLearningProfile();
+  const diagnosis = await analyzeGoal({
+    rawGoal: input.goal,
+    answers: answerMapToStrings(input.existingAnswers),
+    learningProfile,
+    existingGoals: input.pastGoals,
+  });
+  const questionSet = await generateAdaptiveQuestions({
+    diagnosis,
+    rawGoal: input.goal,
+    learningProfile,
   });
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Goal refinement failed: ${res.status} ${text}`);
-  }
-
-  const data = await res.json();
-
-  if (!isGoalRefinementResponse(data)) {
-    throw new Error('Invalid goal refinement response');
-  }
-
-  return data;
+  return {
+    goalLabel: diagnosis.interpretedGoal || input.goal,
+    goalType: mapGoalDomain(diagnosis.primaryDomain),
+    questions: questionSet.questions.map(mapQuestion),
+    analysis: {
+      category: diagnosis.primaryDomain,
+      complexity:
+        diagnosis.recommendedQuestionDepth === 'multi_step' || diagnosis.recommendedQuestionDepth === 'deep'
+          ? 'high_complexity'
+          : diagnosis.recommendedQuestionDepth === 'medium'
+            ? 'advanced'
+            : 'moderate',
+      difficulty:
+        diagnosis.qualityScores.executionReadiness < 0.35
+          ? 'hard'
+          : diagnosis.qualityScores.executionReadiness > 0.7
+            ? 'easy'
+            : 'medium',
+      rationale: [diagnosis.reasoningSummary, questionSet.introMessage],
+      missingInformation: diagnosis.missingDimensions,
+      recommendedQuestionCount: questionSet.questions.length,
+      targetQuestionCount: questionSet.questions.length,
+      adaptiveDiagnosis: diagnosis,
+      adaptiveQuestionSet: questionSet,
+    },
+  };
 }

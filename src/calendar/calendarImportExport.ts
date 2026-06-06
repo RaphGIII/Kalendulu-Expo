@@ -3,6 +3,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 
+import { loadCloudState, saveCloudState } from '../shared/cloudState';
 import { STORAGE_KEYS } from '../shared/storageKeys';
 import type { CalEvent } from './types';
 
@@ -44,6 +45,11 @@ function serializeEvents(events: CalEvent[]) {
 }
 
 async function loadStoredCalendarEvents(): Promise<CalEvent[]> {
+  const cloud = await loadCloudState<unknown[]>(STORAGE_KEYS.CALENDAR_EVENTS);
+  if (Array.isArray(cloud)) {
+    return cloud.map(normalizeStoredEvent).filter(Boolean) as CalEvent[];
+  }
+
   const raw = await AsyncStorage.getItem(STORAGE_KEYS.CALENDAR_EVENTS);
   if (!raw) return [];
 
@@ -57,10 +63,12 @@ async function loadStoredCalendarEvents(): Promise<CalEvent[]> {
 }
 
 async function saveStoredCalendarEvents(events: CalEvent[]): Promise<void> {
+  const serialized = serializeEvents(events);
   await AsyncStorage.setItem(
     STORAGE_KEYS.CALENDAR_EVENTS,
-    JSON.stringify(serializeEvents(events))
+    JSON.stringify(serialized)
   );
+  await saveCloudState(STORAGE_KEYS.CALENDAR_EVENTS, serialized);
 }
 
 function escapeICS(value: string): string {
@@ -322,6 +330,7 @@ export async function importCalendarFromICS(
 
 export async function clearCalendarStorage(): Promise<void> {
   await AsyncStorage.removeItem(STORAGE_KEYS.CALENDAR_EVENTS);
+  await saveCloudState(STORAGE_KEYS.CALENDAR_EVENTS, []);
 }
 
 export async function getCalendarStorageStats(): Promise<{

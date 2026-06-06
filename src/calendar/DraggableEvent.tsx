@@ -1,5 +1,5 @@
 import React, { useMemo, useRef } from 'react';
-import { Animated, PanResponder, StyleSheet, Text, View } from 'react-native';
+import { Animated, PanResponder, StyleSheet, Text } from 'react-native';
 import dayjs from 'dayjs';
 import { CalEvent } from './types';
 

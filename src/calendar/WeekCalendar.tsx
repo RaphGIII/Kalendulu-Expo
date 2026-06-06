@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   PanResponder,
   Pressable,
@@ -19,6 +19,8 @@ import EventModal from './EventModal';
 import MonthView from './MonthView';
 import type { CalEvent } from './types';
 import { useAppTheme } from '../theme/ThemeProvider';
+import { getHolidayName } from './holidays';
+import { defaultAppSettings, loadAppSettings } from '../settings/appSettings';
 
 dayjs.locale('de');
 
@@ -81,7 +83,7 @@ function buildLayoutForDay(dayEvents: CalEvent[], dayWidth: number): LayoutEvent
   );
 
   const columns: CalEvent[][] = [];
-  const eventColumnIndex = new Map<string, number>();
+  const eventColumnIndex = new Map<CalEvent, number>();
 
   for (const event of sorted) {
     let placed = false;
@@ -90,7 +92,7 @@ function buildLayoutForDay(dayEvents: CalEvent[], dayWidth: number): LayoutEvent
       const last = columns[i][columns[i].length - 1];
       if (!overlaps(last, event)) {
         columns[i].push(event);
-        eventColumnIndex.set(event.id, i);
+        eventColumnIndex.set(event, i);
         placed = true;
         break;
       }
@@ -98,7 +100,7 @@ function buildLayoutForDay(dayEvents: CalEvent[], dayWidth: number): LayoutEvent
 
     if (!placed) {
       columns.push([event]);
-      eventColumnIndex.set(event.id, columns.length - 1);
+      eventColumnIndex.set(event, columns.length - 1);
     }
   }
 
@@ -107,7 +109,7 @@ function buildLayoutForDay(dayEvents: CalEvent[], dayWidth: number): LayoutEvent
   const width = (dayWidth - gap * (totalColumns - 1)) / totalColumns;
 
   return sorted.map((event) => {
-    const column = eventColumnIndex.get(event.id) ?? 0;
+    const column = eventColumnIndex.get(event) ?? 0;
     return {
       event,
       top: getEventTop(event),
@@ -171,9 +173,9 @@ function getThemedEventColor(
   return eventPalette[colorIndex % eventPalette.length] ?? fallback;
 }
 
-function getAustriaHolidayName(date: dayjs.Dayjs) {
+export function getAustriaHolidayName(date: dayjs.Dayjs) {
   const year = date.year();
-  const easterSunday = getEasterSunday(year);
+  const easterSunday = getHolidayName(date, 'AT') ? date : dayjs(new Date(year, 3, 1));
 
   const holidays: Record<string, string> = {
     [`${year}-01-01`]: 'Neujahr',
@@ -195,25 +197,6 @@ function getAustriaHolidayName(date: dayjs.Dayjs) {
   };
 
   return holidays[date.format('YYYY-MM-DD')] ?? null;
-}
-
-function getEasterSunday(year: number) {
-  const a = year % 19;
-  const b = Math.floor(year / 100);
-  const c = year % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const month = Math.floor((h + l - 7 * m + 114) / 31);
-  const day = ((h + l - 7 * m + 114) % 31) + 1;
-
-  return dayjs(new Date(year, month - 1, day));
 }
 
 function ModeButton({
@@ -272,6 +255,7 @@ export default function WeekCalendar() {
   const [modalVisible, setModalVisible] = useState(false);
   const [modalDefaultDate, setModalDefaultDate] = useState<Date>(new Date());
   const [editingEvent, setEditingEvent] = useState<CalEvent | null>(null);
+  const [appSettings, setAppSettings] = useState(defaultAppSettings);
 
   const verticalScrollRef = useRef<ScrollView | null>(null);
 
@@ -300,9 +284,13 @@ export default function WeekCalendar() {
   }, [events, selectedMonthDay]);
 
   const selectedMonthHoliday = useMemo(
-    () => getAustriaHolidayName(selectedMonthDay),
-    [selectedMonthDay],
+    () => appSettings.showHolidays ? getHolidayName(selectedMonthDay, appSettings.holidayCountry) : null,
+    [appSettings.holidayCountry, appSettings.showHolidays, selectedMonthDay],
   );
+
+  useEffect(() => {
+    void loadAppSettings().then(setAppSettings);
+  }, []);
 
   useEffect(() => {
     if (mode === 'month') return;
@@ -328,7 +316,7 @@ export default function WeekCalendar() {
     setModalVisible(true);
   };
 
-  const moveRange = (direction: -1 | 1) => {
+  const moveRange = useCallback((direction: -1 | 1) => {
     if (mode === 'month') {
       const next = dayjs(anchorDate).add(direction, 'month').toDate();
       setAnchorDate(next);
@@ -338,7 +326,7 @@ export default function WeekCalendar() {
 
     const amount = getModeDayCount(mode);
     setAnchorDate(dayjs(anchorDate).add(direction * amount, 'day').toDate());
-  };
+  }, [anchorDate, mode, selectedMonthDate]);
 
   const todayLine = useMemo(() => {
     const nowValue = dayjs(now);
@@ -362,7 +350,7 @@ export default function WeekCalendar() {
           }
         },
       }),
-    [mode, anchorDate, selectedMonthDate],
+    [moveRange],
   );
 
   const monthAgendaPullResponder = useMemo(
@@ -450,6 +438,9 @@ export default function WeekCalendar() {
               <MonthView
                 monthDate={anchorDate}
                 events={events}
+                holidayCountry={appSettings.holidayCountry}
+                showHolidays={appSettings.showHolidays}
+                showSundays={appSettings.showSundays}
                 selectedDate={selectedMonthDate}
                 onSelectDay={(date) => {
                   setSelectedMonthDate(date);
@@ -502,7 +493,7 @@ export default function WeekCalendar() {
                       </Text>
                     </View>
                   ) : (
-                    selectedMonthDayEvents.map((event) => {
+                    selectedMonthDayEvents.map((event, index) => {
                       const themedEventColor = getThemedEventColor(
                         event.colorIndex,
                         eventPalette,
@@ -511,7 +502,7 @@ export default function WeekCalendar() {
 
                       return (
                         <Pressable
-                          key={event.id}
+                          key={`${event.id}_${event.start.toISOString()}_${index}`}
                           onPress={() => openExistingEvent(event)}
                           style={[styles.listEventCard, { borderLeftColor: themedEventColor }]}
                         >
@@ -552,7 +543,9 @@ export default function WeekCalendar() {
               {shownDays.map((day) => {
                 const isToday = day.isSame(dayjs(), 'day');
                 const isSunday = day.day() === 0;
-                const holidayName = getAustriaHolidayName(day);
+                const holidayName = appSettings.showHolidays
+                  ? getHolidayName(day, appSettings.holidayCountry)
+                  : null;
 
                 return (
                   <View key={day.format('YYYY-MM-DD')} style={styles.dayHeaderCell}>
@@ -560,7 +553,7 @@ export default function WeekCalendar() {
                       style={[
                         styles.dayHeaderTop,
                         isToday && styles.dayHeaderTopToday,
-                        (isSunday || holidayName) && styles.dayHeaderTopSpecial,
+                        ((appSettings.showSundays && isSunday) || holidayName) && styles.dayHeaderTopSpecial,
                       ]}
                     >
                       {day.format('dd').toUpperCase()}
@@ -569,7 +562,7 @@ export default function WeekCalendar() {
                       style={[
                         styles.dayHeaderBottom,
                         isToday && styles.dayHeaderBottomToday,
-                        (isSunday || holidayName) && styles.dayHeaderBottomSpecial,
+                        ((appSettings.showSundays && isSunday) || holidayName) && styles.dayHeaderBottomSpecial,
                       ]}
                     >
                       {day.format('D')}
@@ -578,7 +571,7 @@ export default function WeekCalendar() {
                       <Text numberOfLines={1} style={styles.dayHeaderHoliday}>
                         {holidayName}
                       </Text>
-                    ) : isSunday ? (
+                    ) : appSettings.showSundays && isSunday ? (
                       <Text numberOfLines={1} style={styles.dayHeaderHoliday}>
                         Sonntag
                       </Text>
@@ -610,7 +603,9 @@ export default function WeekCalendar() {
                     const dayWidthPercent = 100 / shownDays.length;
                     const layout = buildLayoutForDay(dayEvents, 1);
                     const isSunday = day.day() === 0;
-                    const holidayName = getAustriaHolidayName(day);
+                    const holidayName = appSettings.showHolidays
+                      ? getHolidayName(day, appSettings.holidayCountry)
+                      : null;
 
                     return (
                       <View
@@ -618,7 +613,7 @@ export default function WeekCalendar() {
                         style={[
                           styles.dayColumn,
                           shownDays.length > 1 && { width: `${dayWidthPercent}%` },
-                          (isSunday || holidayName) && styles.dayColumnSpecial,
+                          ((appSettings.showSundays && isSunday) || holidayName) && styles.dayColumnSpecial,
                         ]}
                       >
                         {hourLabels.slice(0, -1).map((hour) => (
@@ -630,7 +625,7 @@ export default function WeekCalendar() {
                             <View
                               style={[
                                 styles.hourLine,
-                                (isSunday || holidayName) && styles.hourLineSpecial,
+                                ((appSettings.showSundays && isSunday) || holidayName) && styles.hourLineSpecial,
                               ]}
                             />
                           </Pressable>
@@ -643,7 +638,7 @@ export default function WeekCalendar() {
                           </View>
                         ) : null}
 
-                        {layout.map(({ event, top, height, left, width }) => {
+                        {layout.map(({ event, top, height, left, width }, index) => {
                           const primary = getEventPrimaryLabel(event, height);
                           const secondary = getEventSecondaryLabel(event, height);
                           const fontSize = getEventFontSize(height);
@@ -657,7 +652,7 @@ export default function WeekCalendar() {
 
                           return (
                             <Pressable
-                              key={event.id}
+                              key={`${event.id}_${event.start.toISOString()}_${index}`}
                               onPress={() => openExistingEvent(event)}
                               style={[
                                 styles.eventCard,

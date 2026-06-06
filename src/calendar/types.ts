@@ -7,6 +7,7 @@ export type CalEvent = {
   colorIndex?: number;
   location?: string;
   description?: string;
+  notificationId?: string | null;
 };
 
 export type ViewMode = 'three' | 'day';

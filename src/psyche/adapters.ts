@@ -10,6 +10,7 @@ import {
   TodoStateLike,
 } from './types';
 import { STORAGE_KEYS } from '../shared/storageKeys';
+import { loadCloudState, saveCloudState } from '../shared/cloudState';
 
 function uid(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -47,6 +48,9 @@ function toIsoFromBlock(item: PsycheSuggestedCalendarBlock) {
 
 export async function loadTodoStateBestEffort(): Promise<TodoStateLike> {
   try {
+    const cloud = await loadCloudState<TodoStateLike>(TODO_KEY);
+    if (cloud) return cloud;
+
     const raw = await AsyncStorage.getItem(TODO_KEY);
     if (!raw) {
       return { name: 'Todos', categories: [], tasks: [] };
@@ -65,6 +69,9 @@ export async function loadTodoStateBestEffort(): Promise<TodoStateLike> {
 
 export async function loadHabitsState(): Promise<HabitsStateLike> {
   try {
+    const cloud = await loadCloudState<HabitsStateLike>(HABITS_KEY);
+    if (cloud) return cloud;
+
     const raw = await AsyncStorage.getItem(HABITS_KEY);
     if (!raw) {
       return { name: 'Habits', habits: [] };
@@ -82,6 +89,9 @@ export async function loadHabitsState(): Promise<HabitsStateLike> {
 
 export async function loadCalendarEventsBestEffort(): Promise<CalendarEventLike[]> {
   try {
+    const cloud = await loadCloudState<CalendarEventLike[]>(CALENDAR_KEY);
+    if (Array.isArray(cloud)) return cloud;
+
     const raw = await AsyncStorage.getItem(CALENDAR_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
@@ -119,6 +129,7 @@ export async function applyTodoSuggestions(items: PsycheSuggestedTodo[]) {
   };
 
   await AsyncStorage.setItem(TODO_KEY, JSON.stringify(next));
+  await saveCloudState(TODO_KEY, next);
   return { added: items.length, items: created };
 }
 
@@ -151,6 +162,7 @@ export async function applyHabitSuggestions(items: PsycheSuggestedHabit[]) {
   };
 
   await AsyncStorage.setItem(HABITS_KEY, JSON.stringify(next));
+  await saveCloudState(HABITS_KEY, next);
   return { added: items.length, items: mapped };
 }
 
@@ -175,6 +187,7 @@ export async function applyCalendarSuggestions(items: PsycheSuggestedCalendarBlo
 
   const next = [...current, ...mapped];
   await AsyncStorage.setItem(CALENDAR_KEY, JSON.stringify(next));
+  await saveCloudState(CALENDAR_KEY, next);
   return { added: items.length, items: mapped };
 }
 

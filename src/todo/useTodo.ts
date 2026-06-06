@@ -4,8 +4,10 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import type { Category, Task, TaskPriority, TodoState } from './types';
 import { cancelReminder, scheduleTaskReminder } from './notifications';
+import { loadCloudState, saveCloudState } from '../shared/cloudState';
+import { STORAGE_KEYS } from '../shared/storageKeys';
 
-const TODO_STORAGE_KEY = 'kalendulu:todo:v1';
+const TODO_STORAGE_KEY = STORAGE_KEYS.TODO;
 
 function uid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -96,7 +98,10 @@ export function useTodo() {
 
   const loadState = useCallback(async () => {
     try {
-      const raw = await AsyncStorage.getItem(TODO_STORAGE_KEY);
+      const cloudState = await loadCloudState<TodoState>(TODO_STORAGE_KEY);
+      const raw = cloudState
+        ? JSON.stringify(cloudState)
+        : await AsyncStorage.getItem(TODO_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as TodoState;
         setState(normalizeState(parsed));
@@ -123,9 +128,9 @@ export function useTodo() {
 
   useEffect(() => {
     if (!hydrated) return;
-    AsyncStorage.setItem(TODO_STORAGE_KEY, JSON.stringify(state)).catch((e) =>
-      console.log('Failed to save todo state', e),
-    );
+    AsyncStorage.setItem(TODO_STORAGE_KEY, JSON.stringify(state))
+      .then(() => saveCloudState(TODO_STORAGE_KEY, state))
+      .catch((e) => console.log('Failed to save todo state', e));
   }, [state, hydrated]);
 
   const categoriesWithCounts = useMemo(() => {

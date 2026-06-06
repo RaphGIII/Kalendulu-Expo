@@ -1,7 +1,6 @@
-import 'react-native-gesture-handler';
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -10,22 +9,60 @@ import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import WelcomeIntroOverlay from '@/components/WelcomeIntroOverlay';
 import { AuthProvider, useAuth } from '@/src/auth/AuthProvider';
 
+const WELCOME_INTRO_STORAGE_PREFIX = 'kalendulu:welcome-intro-shown';
+
 function AppNavigator() {
   const { ready, colors } = useAppTheme();
   const { authReady, session, fullName } = useAuth();
   const [showWelcomeIntro, setShowWelcomeIntro] = useState(false);
+  const shownWelcomeForUserRef = useRef<string | null>(null);
+  const userId = session?.user?.id ?? null;
 
   useEffect(() => {
-    if (ready && authReady && session) {
-      const timer = setTimeout(() => {
-        setShowWelcomeIntro(true);
-      }, 120);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-      return () => clearTimeout(timer);
-    } else {
+    if (!ready || !authReady || !userId) {
       setShowWelcomeIntro(false);
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+      };
     }
-  }, [ready, authReady, session]);
+
+    if (shownWelcomeForUserRef.current === userId) {
+      return () => {
+        cancelled = true;
+        if (timer) clearTimeout(timer);
+      };
+    }
+
+    const storageKey = `${WELCOME_INTRO_STORAGE_PREFIX}:${userId}`;
+
+    AsyncStorage.getItem(storageKey)
+      .then((alreadyShown) => {
+        if (cancelled || alreadyShown === 'true') {
+          shownWelcomeForUserRef.current = userId;
+          return;
+        }
+
+        shownWelcomeForUserRef.current = userId;
+        return AsyncStorage.setItem(storageKey, 'true').then(() => {
+          if (cancelled) return;
+          timer = setTimeout(() => {
+            setShowWelcomeIntro(true);
+          }, 120);
+        });
+      })
+      .catch(() => {
+        shownWelcomeForUserRef.current = userId;
+      });
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [ready, authReady, userId]);
 
   if (!ready || !authReady) {
     return (
