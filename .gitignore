@@ -46,3 +46,7 @@ app-example
 .dev.vars
 .env
 .env.local
+
+.env
+.env.*
+!.env.example
