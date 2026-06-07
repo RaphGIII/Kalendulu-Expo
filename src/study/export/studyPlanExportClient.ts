@@ -3,13 +3,54 @@ import * as Sharing from 'expo-sharing';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-import type { StudyPlan, StudyProject, KnowledgeUnit } from '../types';
+import type { StudyPlan, StudyProject, KnowledgeUnit, StudySession } from '../types';
 
 function safeFilePart(value: string) {
   return value.replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').slice(0, 60);
 }
 
+function coverageLabel(status: KnowledgeUnit['coverageStatus']) {
+  if (status === 'core') return 'Kernstoff';
+  if (status === 'important') return 'Wichtig';
+  return 'Zusatz';
+}
+
+function sessionTypeLabel(type: StudySession['sessionType']) {
+  if (type === 'review') return 'Wiederholen';
+  if (type === 'catchup') return 'Nachholen';
+  if (type === 'quiz') return 'Quiz';
+  return 'Lernen';
+}
+
+function groupSessionsByDate(sessions: StudySession[]) {
+  const groups = new Map<string, StudySession[]>();
+  for (const session of sessions) {
+    const key = session.scheduledStart.slice(0, 10);
+    groups.set(key, [...(groups.get(key) ?? []), session]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, items]) => ({ date, sessions: items.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)) }));
+}
+
+function timeLabel(value: string) {
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 function renderPlanText(project: StudyProject, units: KnowledgeUnit[], plan: StudyPlan) {
+  const unitNames = new Map(units.map((unit) => [unit.id, unit.title]));
+  const dayLines = groupSessionsByDate(plan.sessions).flatMap((day) => [
+    '',
+    day.date,
+    ...day.sessions.map(
+      (session) =>
+        `- ${timeLabel(session.scheduledStart)}-${timeLabel(session.scheduledEnd)} ${sessionTypeLabel(session.sessionType)}: ${session.title} (${session.estimatedMinutes} Min)`,
+    ),
+  ]);
+  const reviewLines = plan.repetitionItems.map((item) => {
+    const title = unitNames.get(item.unitId) ?? 'Lerneinheit';
+    return `- ${new Date(item.dueAt).toLocaleString()}: Wiederholen ${title} (${item.estimatedMinutes} Min)`;
+  });
   const lines = [
     'Kalendulu Lernplan',
     '',
@@ -21,13 +62,16 @@ function renderPlanText(project: StudyProject, units: KnowledgeUnit[], plan: Stu
     `Machbarkeit: ${plan.feasible ? 'realistisch' : 'eng'}`,
     '',
     'Priorisierte Stoffuebersicht',
-    ...units.map((unit) => `- ${unit.title} (${unit.coverageStatus}, S${unit.difficulty}/W${unit.importance}, ${unit.estimatedMinutes} Min)`),
+    ...units.map(
+      (unit) =>
+        `- ${unit.title} (${coverageLabel(unit.coverageStatus)}, Schwierigkeit ${unit.difficulty}/5, Wichtigkeit ${unit.importance}/5, ${unit.estimatedMinutes} Min)`,
+    ),
     '',
     'Tagesplan',
-    ...plan.sessions.map((session) => `- ${new Date(session.scheduledStart).toLocaleString()}: ${session.title} (${session.estimatedMinutes} Min)`),
+    ...dayLines,
     '',
     'Spaced Repetition',
-    ...plan.repetitionItems.map((item) => `- ${new Date(item.dueAt).toLocaleString()}: Review ${item.unitId} (${item.estimatedMinutes} Min)`),
+    ...reviewLines,
     '',
     'Hinweis: Dieser Lernplan wurde aus deinen Angaben algorithmisch erstellt.',
   ];
@@ -53,7 +97,8 @@ export async function exportStudyPlanAsPdf(input: {
       page = pdf.addPage([595, 842]);
       y = 800;
     }
-    const isTitle = line === 'Kalendulu Lernplan' || ['Priorisierte Stoffuebersicht', 'Tagesplan', 'Spaced Repetition'].includes(line);
+    const isTitle =
+      line === 'Kalendulu Lernplan' || ['Priorisierte Stoffuebersicht', 'Tagesplan', 'Spaced Repetition'].includes(line);
     page.drawText(line.slice(0, 105), {
       x: 42,
       y,

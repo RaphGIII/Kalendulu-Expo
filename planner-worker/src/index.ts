@@ -16,6 +16,7 @@ export interface Env {
   OPENAI_MODEL_BALANCED?: string;
   OPENAI_MODEL_STRONG?: string;
   OPENAI_STUDY_ENHANCEMENT_MODEL?: string;
+  OPENAI_STUDY_ENHANCEMENT_MAX_COST_USD?: string;
 }
 
 type GoalQuestion = {
@@ -1388,20 +1389,41 @@ async function runStudyExtraction(request: Request, userId: string) {
 }
 
 async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env) {
+  const userPayload = JSON.stringify(body);
+  const estimatedInputTokens = Math.ceil(userPayload.length / 4);
+  const estimatedOutputTokens = 1400;
+  const estimatedCostUsd = (estimatedInputTokens + estimatedOutputTokens) * 0.0000001;
+  const maxCostUsd = Number(env.OPENAI_STUDY_ENHANCEMENT_MAX_COST_USD || '0.002');
+
+  if (estimatedCostUsd > maxCostUsd) {
+    return {
+      skipped: true,
+      reason: 'cost_guard',
+      estimatedCostUsd,
+      maxCostUsd,
+    };
+  }
+
   const raw = await callPlannerModelRaw({
     env,
     model: env.OPENAI_STUDY_ENHANCEMENT_MODEL || env.OPENAI_MODEL_CHEAP || 'gpt-5-nano',
     system: [
       'Du bist Kalendulu Study Enhancer.',
       'Antworte nur mit JSON.',
-      'Nutze nur die kompakten KnowledgeUnit-Daten und Plan-Metadaten.',
+      'Nutze nur die kompakten Lerneinheiten und Plan-Metadaten.',
       'Keine neuen Themen erfinden, keine Themen entfernen, keinen Scheduler ersetzen.',
-      'Verbessere nur Titel, kurze summaries, Aufgabenformulierungen und Review-Hinweise.',
+      'Verbessere nur Titel, kurze summaries, Aufgabenformulierungen, Session-Titel und Wiederholungs-Hinweise.',
+      'Gib ausschliesslich JSON mit optionalen Feldern units und plan zurueck.',
+      'Behalte IDs, Zeiten, Dauer, unitIds und Reihenfolge bei.',
+      'Nutze deutsche Nutzertexte: Lerneinheiten, Wiederholen, Kernstoff, Wichtig, Zusatz.',
     ].join('\n'),
-    user: JSON.stringify(body),
-    maxCompletionTokens: 2200,
+    user: userPayload,
+    maxCompletionTokens: estimatedOutputTokens,
   });
-  return parseModelJsonLoose<unknown>(raw) ?? body;
+  return {
+    ...(parseModelJsonLoose<Record<string, unknown>>(raw) ?? {}),
+    estimatedCostUsd,
+  };
 }
 
 export default {

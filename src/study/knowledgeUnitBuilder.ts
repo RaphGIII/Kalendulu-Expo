@@ -22,8 +22,8 @@ function priorityFor(input: {
 }
 
 function coverageFor(priorityScore: number): KnowledgeUnit['coverageStatus'] {
-  if (priorityScore >= 110) return 'core';
-  if (priorityScore >= 78) return 'important';
+  if (priorityScore >= 95) return 'core';
+  if (priorityScore >= 65) return 'important';
   return 'supplementary';
 }
 
@@ -43,7 +43,15 @@ export function mergeSimilarKnowledgeUnits(units: KnowledgeUnit[]): KnowledgeUni
     existing.importance = Math.max(existing.importance, unit.importance) as KnowledgeUnit['importance'];
   }
 
-  return merged.map((unit, index) => ({ ...unit, orderIndex: index }));
+  return merged.map((unit, index) => {
+    const priorityScore = priorityFor({ difficulty: unit.difficulty, importance: unit.importance, orderIndex: index });
+    return {
+      ...unit,
+      orderIndex: index,
+      priorityScore,
+      coverageStatus: coverageFor(priorityScore),
+    };
+  });
 }
 
 export function buildKnowledgeUnits(input: {
@@ -56,6 +64,7 @@ export function buildKnowledgeUnits(input: {
     const cognitiveType = estimateCognitiveType(text);
     const difficulty = estimateDifficulty(text);
     const importance = estimateImportance(text, section.title);
+    const priorityScore = priorityFor({ difficulty, importance, orderIndex: index });
 
     return {
       id: uid('unit'),
@@ -75,8 +84,8 @@ export function buildKnowledgeUnits(input: {
       orderIndex: index,
       enabled: true,
       status: 'new' as const,
-      priorityScore: priorityFor({ difficulty, importance, orderIndex: index }),
-      coverageStatus: coverageFor(priorityFor({ difficulty, importance, orderIndex: index })),
+      priorityScore,
+      coverageStatus: coverageFor(priorityScore),
       sourcePageStart: section.sourcePageStart,
       sourcePageEnd: section.sourcePageEnd,
       sourceSectionTitle: section.sourceSectionTitle ?? section.title,

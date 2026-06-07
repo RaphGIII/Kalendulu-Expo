@@ -25,6 +25,109 @@ async function saveArray<T>(key: string, value: T[]) {
   await saveCloudState(key, value);
 }
 
+function sameStudyDate(iso: string, date: string) {
+  return iso.slice(0, 10) === date;
+}
+
+function rebuildPlanWithSessions(plan: StudyPlan, sessions: StudySession[]): StudyPlan {
+  const learningMinutes = sessions
+    .filter((session) => session.sessionType !== 'review')
+    .reduce((sum, session) => sum + session.estimatedMinutes, 0);
+  const reviewMinutes = sessions
+    .filter((session) => session.sessionType === 'review')
+    .reduce((sum, session) => sum + session.estimatedMinutes, 0);
+  const bufferMinutes = Math.ceil((learningMinutes + reviewMinutes) * 0.2);
+  const requiredMinutes = learningMinutes + reviewMinutes + bufferMinutes;
+  const overloadMinutes = Math.max(0, requiredMinutes - plan.availableMinutes);
+
+  return {
+    ...plan,
+    sessions: sessions.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)),
+    learningMinutes,
+    reviewMinutes,
+    bufferMinutes,
+    requiredMinutes,
+    feasible: overloadMinutes === 0,
+    overloadMinutes: overloadMinutes === 0 ? undefined : overloadMinutes,
+  };
+}
+
+function withUpdatedTiming(session: StudySession, start: Date, minutes = session.estimatedMinutes): StudySession {
+  return {
+    ...session,
+    scheduledStart: start.toISOString(),
+    scheduledEnd: new Date(start.getTime() + minutes * 60 * 1000).toISOString(),
+    estimatedMinutes: minutes,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+async function removeLinkedStudyAppData(input: {
+  projectTitle?: string;
+  sessionIds?: Set<string>;
+  date?: string;
+  allProject?: boolean;
+}) {
+  const titlePrefix = input.projectTitle ? `${input.projectTitle}:` : undefined;
+  const sessionIds = input.sessionIds ?? new Set<string>();
+
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEYS.TODO);
+    const cloud = await loadCloudState<any>(STORAGE_KEYS.TODO);
+    const todo = cloud ?? (raw ? JSON.parse(raw) : null);
+    if (todo && Array.isArray(todo.tasks)) {
+      const next = {
+        ...todo,
+        tasks: todo.tasks.filter((task: any) => {
+          const title = String(task?.title ?? '');
+          const id = String(task?.id ?? '');
+          const sessionMatch = [...sessionIds].some((sessionId) => id.includes(sessionId));
+          const projectMatch = Boolean(input.allProject && titlePrefix && title.startsWith(titlePrefix));
+          return !(id.startsWith('study_todo_') && (sessionMatch || projectMatch));
+        }),
+      };
+      await AsyncStorage.setItem(STORAGE_KEYS.TODO, JSON.stringify(next));
+      await saveCloudState(STORAGE_KEYS.TODO, next);
+    }
+  } catch {}
+
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEYS.CALENDAR_EVENTS);
+    const cloud = await loadCloudState<any[]>(STORAGE_KEYS.CALENDAR_EVENTS);
+    const events = Array.isArray(cloud) ? cloud : raw ? JSON.parse(raw) : [];
+    if (Array.isArray(events)) {
+      const next = events.filter((event: any) => {
+        const title = String(event?.title ?? '');
+        const id = String(event?.id ?? '');
+        const dateMatches = input.date ? sameStudyDate(String(event?.start ?? ''), input.date) : true;
+        const sessionMatch = [...sessionIds].some((sessionId) => id.includes(sessionId));
+        return !(id.startsWith('study_cal_') && (sessionMatch || (titlePrefix && title.startsWith(titlePrefix) && dateMatches)));
+      });
+      await AsyncStorage.setItem(STORAGE_KEYS.CALENDAR_EVENTS, JSON.stringify(next));
+      await saveCloudState(STORAGE_KEYS.CALENDAR_EVENTS, next);
+    }
+  } catch {}
+
+  try {
+    const raw = await AsyncStorage.getItem(STORAGE_KEYS.HABITS);
+    const cloud = await loadCloudState<any>(STORAGE_KEYS.HABITS);
+    const habits = cloud ?? (raw ? JSON.parse(raw) : null);
+    if (habits && Array.isArray(habits.habits)) {
+      const next = {
+        ...habits,
+        habits: habits.habits.filter((habit: any) => {
+          const title = String(habit?.title ?? '');
+          const id = String(habit?.id ?? '');
+          const projectMatch = Boolean(input.allProject && titlePrefix && title.startsWith(titlePrefix));
+          return !(id.startsWith('study_habit_') && projectMatch);
+        }),
+      };
+      await AsyncStorage.setItem(STORAGE_KEYS.HABITS, JSON.stringify(next));
+      await saveCloudState(STORAGE_KEYS.HABITS, next);
+    }
+  } catch {}
+}
+
 export async function loadStudyData() {
   const [projects, units, plans, sessions, repetitionItems] = await Promise.all([
     loadArray<StudyProject>(STORAGE_KEYS.STUDY_PROJECTS),
@@ -64,6 +167,7 @@ export async function saveStudyProjectBundle(input: {
 
 export async function deleteStudyProject(projectId: string) {
   const current = await loadStudyData();
+  const project = current.projects.find((item) => item.id === projectId);
   await Promise.all([
     saveArray(STORAGE_KEYS.STUDY_PROJECTS, current.projects.filter((item) => item.id !== projectId)),
     saveArray(STORAGE_KEYS.STUDY_UNITS, current.units.filter((item) => item.projectId !== projectId)),
@@ -74,6 +178,220 @@ export async function deleteStudyProject(projectId: string) {
   const progress = await import('./studyProgress');
   const steps = await progress.loadStudyProgressSteps();
   await progress.saveStudyProgressSteps(steps.filter((step) => step.projectId !== projectId));
+  await removeLinkedStudyAppData({ projectTitle: project?.title, allProject: true });
+}
+
+export async function updateStudySession(sessionId: string, updates: Partial<StudySession>) {
+  const current = await loadStudyData();
+  const session = current.sessions.find((item) => item.id === sessionId);
+  if (!session) return current;
+
+  const nextSession: StudySession = {
+    ...session,
+    ...updates,
+    updatedAt: new Date().toISOString(),
+  };
+  const projectSessions = current.sessions
+    .map((item) => (item.id === sessionId ? nextSession : item))
+    .filter((item) => item.projectId === session.projectId);
+  const nextPlan = rebuildPlanWithSessions(
+    current.plans.find((plan) => plan.projectId === session.projectId) ?? {
+      id: `study_plan_${session.projectId}`,
+      projectId: session.projectId,
+      requiredMinutes: 0,
+      availableMinutes: 0,
+      learningMinutes: 0,
+      reviewMinutes: 0,
+      bufferMinutes: 0,
+      feasible: true,
+      sessions: [],
+      repetitionItems: [],
+    },
+    projectSessions,
+  );
+
+  await Promise.all([
+    saveArray(STORAGE_KEYS.STUDY_SESSIONS, [
+      ...projectSessions,
+      ...current.sessions.filter((item) => item.projectId !== session.projectId),
+    ]),
+    saveArray(STORAGE_KEYS.STUDY_PLANS, [
+      nextPlan,
+      ...current.plans.filter((plan) => plan.projectId !== session.projectId),
+    ]),
+  ]);
+
+  const progress = await import('./studyProgress');
+  const steps = await progress.loadStudyProgressSteps();
+  await progress.saveStudyProgressSteps(steps.map((step) =>
+    step.sessionId === sessionId
+      ? {
+          ...step,
+          title: nextSession.title,
+          description: nextSession.todoTitles.join(' - '),
+          stepType: nextSession.sessionType,
+          scheduledAt: nextSession.scheduledStart,
+          estimatedMinutes: nextSession.estimatedMinutes,
+          status: updates.completed ? 'done' : step.status,
+          completedAt: updates.completed ? new Date().toISOString() : step.completedAt,
+        }
+      : step,
+  ));
+  return loadStudyData();
+}
+
+export async function rescheduleStudySession(sessionId: string, newDateTime: string) {
+  const current = await loadStudyData();
+  const session = current.sessions.find((item) => item.id === sessionId);
+  if (!session) return current;
+  return updateStudySession(sessionId, withUpdatedTiming(session, new Date(newDateTime)));
+}
+
+export async function deleteStudySession(sessionId: string) {
+  const current = await loadStudyData();
+  const session = current.sessions.find((item) => item.id === sessionId);
+  if (!session) return current;
+  const project = current.projects.find((item) => item.id === session.projectId);
+  const projectSessions = current.sessions.filter((item) => item.projectId === session.projectId && item.id !== sessionId);
+  const plan = current.plans.find((item) => item.projectId === session.projectId);
+  const nextPlan = plan ? rebuildPlanWithSessions(plan, projectSessions) : undefined;
+
+  await Promise.all([
+    saveArray(STORAGE_KEYS.STUDY_SESSIONS, [
+      ...projectSessions,
+      ...current.sessions.filter((item) => item.projectId !== session.projectId),
+    ]),
+    saveArray(STORAGE_KEYS.STUDY_PLANS, [
+      ...(nextPlan ? [nextPlan] : []),
+      ...current.plans.filter((item) => item.projectId !== session.projectId),
+    ]),
+  ]);
+
+  const progress = await import('./studyProgress');
+  const steps = await progress.loadStudyProgressSteps();
+  await progress.saveStudyProgressSteps(steps.filter((step) => step.sessionId !== sessionId));
+  await removeLinkedStudyAppData({ projectTitle: project?.title, sessionIds: new Set([sessionId]) });
+  return loadStudyData();
+}
+
+export async function deleteStudyDay(projectId: string, date: string) {
+  const current = await loadStudyData();
+  const project = current.projects.find((item) => item.id === projectId);
+  const removedSessions = current.sessions.filter((item) => item.projectId === projectId && sameStudyDate(item.scheduledStart, date));
+  const removedIds = new Set(removedSessions.map((session) => session.id));
+  const projectSessions = current.sessions.filter((item) => item.projectId === projectId && !removedIds.has(item.id));
+  const plan = current.plans.find((item) => item.projectId === projectId);
+  const nextPlan = plan ? rebuildPlanWithSessions(plan, projectSessions) : undefined;
+
+  await Promise.all([
+    saveArray(STORAGE_KEYS.STUDY_SESSIONS, [
+      ...projectSessions,
+      ...current.sessions.filter((item) => item.projectId !== projectId),
+    ]),
+    saveArray(STORAGE_KEYS.STUDY_PLANS, [
+      ...(nextPlan ? [nextPlan] : []),
+      ...current.plans.filter((item) => item.projectId !== projectId),
+    ]),
+  ]);
+
+  const progress = await import('./studyProgress');
+  const steps = await progress.loadStudyProgressSteps();
+  await progress.saveStudyProgressSteps(steps.filter((step) => !removedIds.has(step.sessionId ?? '')));
+  await removeLinkedStudyAppData({ projectTitle: project?.title, sessionIds: removedIds, date });
+  return loadStudyData();
+}
+
+export async function updateStudyDay(projectId: string, date: string, updates: {
+  date?: string;
+  startTime?: string;
+  availableMinutes?: number;
+}) {
+  const current = await loadStudyData();
+  const daySessions = current.sessions
+    .filter((item) => item.projectId === projectId && sameStudyDate(item.scheduledStart, date))
+    .sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart));
+  if (!daySessions.length) return current;
+
+  const nextDate = updates.date || date;
+  const startTime = updates.startTime || daySessions[0].scheduledStart.slice(11, 16);
+  const [hoursRaw, minutesRaw] = startTime.split(':');
+  const start = new Date(`${nextDate}T00:00:00.000`);
+  start.setHours(Number(hoursRaw) || 0, Number(minutesRaw) || 0, 0, 0);
+
+  const totalCurrentMinutes = daySessions.reduce((sum, session) => sum + session.estimatedMinutes, 0);
+  const scale = updates.availableMinutes && updates.availableMinutes > 0 && updates.availableMinutes < totalCurrentMinutes
+    ? updates.availableMinutes / totalCurrentMinutes
+    : 1;
+
+  let cursor = start;
+  const moved = daySessions.map((session) => {
+    const minutes = Math.max(10, Math.round(session.estimatedMinutes * scale));
+    const next = withUpdatedTiming(session, cursor, minutes);
+    cursor = new Date(next.scheduledEnd);
+    return next;
+  });
+  const movedById = new Map(moved.map((session) => [session.id, session]));
+  const projectSessions = current.sessions
+    .filter((item) => item.projectId === projectId)
+    .map((item) => movedById.get(item.id) ?? item);
+  const plan = current.plans.find((item) => item.projectId === projectId);
+  const nextPlan = plan ? rebuildPlanWithSessions(plan, projectSessions) : undefined;
+
+  await Promise.all([
+    saveArray(STORAGE_KEYS.STUDY_SESSIONS, [
+      ...projectSessions,
+      ...current.sessions.filter((item) => item.projectId !== projectId),
+    ]),
+    saveArray(STORAGE_KEYS.STUDY_PLANS, [
+      ...(nextPlan ? [nextPlan] : []),
+      ...current.plans.filter((item) => item.projectId !== projectId),
+    ]),
+  ]);
+
+  const progress = await import('./studyProgress');
+  const steps = await progress.loadStudyProgressSteps();
+  await progress.saveStudyProgressSteps(steps.map((step) => {
+    const session = step.sessionId ? movedById.get(step.sessionId) : undefined;
+    return session
+      ? {
+          ...step,
+          title: session.title,
+          description: session.todoTitles.join(' - '),
+          stepType: session.sessionType,
+          scheduledAt: session.scheduledStart,
+          estimatedMinutes: session.estimatedMinutes,
+        }
+      : step;
+  }));
+
+  return loadStudyData();
+}
+
+export async function addStudySession(projectId: string, session: Omit<StudySession, 'id' | 'projectId' | 'completed'>) {
+  const current = await loadStudyData();
+  const nextSession: StudySession = {
+    ...session,
+    id: `study_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    projectId,
+    completed: false,
+    updatedAt: new Date().toISOString(),
+  };
+  const projectSessions = [nextSession, ...current.sessions.filter((item) => item.projectId === projectId)];
+  const plan = current.plans.find((item) => item.projectId === projectId);
+  const nextPlan = plan ? rebuildPlanWithSessions(plan, projectSessions) : undefined;
+
+  await Promise.all([
+    saveArray(STORAGE_KEYS.STUDY_SESSIONS, [
+      ...projectSessions,
+      ...current.sessions.filter((item) => item.projectId !== projectId),
+    ]),
+    saveArray(STORAGE_KEYS.STUDY_PLANS, [
+      ...(nextPlan ? [nextPlan] : []),
+      ...current.plans.filter((item) => item.projectId !== projectId),
+    ]),
+  ]);
+  await replaceProjectProgressSteps(projectId, projectSessions);
+  return loadStudyData();
 }
 
 export function createTemporaryAsset(input: {

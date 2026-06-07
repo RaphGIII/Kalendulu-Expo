@@ -48,6 +48,9 @@ export type StudySession = {
   estimatedMinutes: number;
   unitIds: string[];
   todoTitles: string[];
+  note?: string;
+  updatedAt?: string;
+  deletedAt?: string;
   completed: boolean;
 };
 
@@ -97,7 +100,7 @@ export type StudyProgressStep = {
   scheduledAt: string;
   estimatedMinutes: number;
   completedAt?: string;
-  status: 'open' | 'done' | 'missed' | 'rescheduled';
+  status: 'open' | 'done' | 'missed' | 'rescheduled' | 'deleted';
   qualityScore?: 0 | 1 | 2 | 3 | 4 | 5;
   actualMinutes?: number;
 };

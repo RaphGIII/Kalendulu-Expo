@@ -83,6 +83,7 @@ export function scheduleStudyPlan(input: {
   targetLevel: string;
   examDate?: string;
 }): StudyPlan {
+  const unitTitles = new Map(input.units.map((unit) => [unit.id, unit.title]));
   const learningMinutes = input.units
     .filter((unit) => unit.enabled)
     .reduce((sum, unit) => sum + unit.estimatedMinutes, 0);
@@ -120,16 +121,17 @@ export function scheduleStudyPlan(input: {
 
   input.repetitionItems.forEach((item) => {
     const start = dayjs(item.dueAt);
+    const unitTitle = unitTitles.get(item.unitId) ?? 'Lerneinheit';
     sessions.push({
       id: uid('review_session'),
       projectId: input.projectId,
-      title: `Review: ${item.unitId}`,
+      title: `Wiederholen: ${unitTitle}`,
       sessionType: 'review',
       scheduledStart: start.toISOString(),
       scheduledEnd: start.add(item.estimatedMinutes, 'minute').toISOString(),
       estimatedMinutes: item.estimatedMinutes,
       unitIds: [item.unitId],
-      todoTitles: ['Review abhaken', 'Active Recall ohne Unterlagen testen'],
+      todoTitles: [`${unitTitle}: Wiederholung abhaken`, `${unitTitle}: Active Recall ohne Unterlagen testen`],
       completed: false,
     });
   });

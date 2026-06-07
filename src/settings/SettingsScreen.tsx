@@ -1310,8 +1310,9 @@ export default function SettingsScreen() {
               <View style={styles.settingsList}>
                 <SettingsEntry
                   title="Premium ansehen"
-                  subtitle="Produkt-IDs sind fuer RevenueCat und Apple In-App Purchases vorbereitet"
+                  subtitle="Oeffnet die vollstaendige Planuebersicht mit Student, Premium und Jahresplan"
                   value={productIds.premiumYearly}
+                  onPress={() => router.push('/premium')}
                   colors={colors}
                   fontFamily={fontFamily}
                 />

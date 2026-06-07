@@ -49,7 +49,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="todo"
         options={{
-          title: 'ToDos',
+          title: 'Aufgaben',
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="checkbox-outline" size={size} color={color} />
           ),
@@ -59,10 +59,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="habits"
         options={{
-          title: 'Habits',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="repeat-outline" size={size} color={color} />
-          ),
+          href: null,
         }}
       />
 
@@ -89,9 +86,16 @@ export default function TabLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: 'Einstellungen',
+          href: null,
+        }}
+      />
+
+      <Tabs.Screen
+        name="more"
+        options={{
+          title: 'Mehr',
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings-outline" size={size} color={color} />
+            <Ionicons name="menu-outline" size={size} color={color} />
           ),
         }}
       />

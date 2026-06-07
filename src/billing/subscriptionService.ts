@@ -81,6 +81,35 @@ export async function restorePurchases(userId?: string) {
   }
 }
 
+export async function purchaseRevenueCatProduct(productId: string, userId?: string) {
+  const configured = await configureRevenueCat(userId);
+  if (!configured || !hasRevenueCatConfig()) {
+    return {
+      status: await getCachedSubscriptionStatus(),
+      cancelled: false,
+      configured: false,
+    };
+  }
+
+  try {
+    await Purchases.purchaseProduct(productId);
+    return {
+      status: await refreshSubscriptionStatus(userId),
+      cancelled: false,
+      configured: true,
+    };
+  } catch (error: any) {
+    if (error?.userCancelled) {
+      return {
+        status: await getCachedSubscriptionStatus(),
+        cancelled: true,
+        configured: true,
+      };
+    }
+    throw error;
+  }
+}
+
 export async function openSubscriptionManagement() {
   await Linking.openURL('https://apps.apple.com/account/subscriptions');
 }

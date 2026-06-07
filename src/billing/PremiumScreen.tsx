@@ -1,0 +1,263 @@
+import React, { useMemo, useState } from 'react';
+import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { router } from 'expo-router';
+
+import { useAuth } from '../auth/AuthProvider';
+import { useAppTheme } from '../theme/ThemeProvider';
+import {
+  openSubscriptionManagement,
+  purchaseRevenueCatProduct,
+  REVENUECAT_PRODUCTS,
+  restorePurchases,
+  useSubscription,
+} from './index';
+import type { UserStudyTier } from './types';
+
+type PremiumPlan = {
+  id: 'free' | 'student' | 'premium' | 'yearly';
+  tier: UserStudyTier;
+  title: string;
+  badge: string;
+  price: string;
+  subtitle?: string;
+  productId?: string;
+  cta: string;
+  features: string[];
+  tone: 'free' | 'student' | 'premium' | 'yearly';
+};
+
+const PLANS: PremiumPlan[] = [
+  {
+    id: 'free',
+    tier: 'free',
+    title: 'Kostenlos',
+    badge: 'Zum Testen',
+    price: '0 EUR',
+    cta: 'Aktueller Plan',
+    tone: 'free',
+    features: [
+      'Themenliste eingeben',
+      'Text einfuegen',
+      'Kleine PDF/DOCX bis 10 Seiten',
+      '1 aktives Lernprojekt',
+      'Algorithmischer Lernplan',
+      'Einfache Fortschrittsansicht',
+    ],
+    subtitle: 'Fuer grosse Skripte und Exporte brauchst du Premium.',
+  },
+  {
+    id: 'student',
+    tier: 'student',
+    title: 'Student',
+    badge: 'Fuer kleine Skripte',
+    price: '1,99 EUR/Monat',
+    productId: REVENUECAT_PRODUCTS.studentMonthly,
+    cta: 'Student waehlen',
+    tone: 'student',
+    features: [
+      'PDF/DOCX bis 100 Seiten',
+      'Bis 300 Seiten pro Monat',
+      'Mehrere Lernprojekte',
+      'PDF-Export',
+      'Lernfortschritt mit Steps',
+      'Priorisierte Tagesplanung',
+    ],
+  },
+  {
+    id: 'premium',
+    tier: 'premium',
+    title: 'Premium',
+    badge: 'Beliebt',
+    price: '4,99 EUR/Monat',
+    productId: REVENUECAT_PRODUCTS.premiumMonthly,
+    cta: 'Premium starten',
+    tone: 'premium',
+    features: [
+      'PDF/DOCX bis 300 Seiten pro Datei',
+      'Bis 1.000 Seiten pro Monat',
+      'KI-Veredelung mit Nano',
+      'PDF- und DOCX-Export',
+      'Vollstaendige Fortschrittsanalyse',
+      'Plan neu berechnen',
+      'Grosse Skripte automatisch strukturieren',
+    ],
+  },
+  {
+    id: 'yearly',
+    tier: 'premium',
+    title: 'Jahresplan',
+    badge: 'Bester Wert',
+    price: '39,99 EUR/Jahr',
+    productId: REVENUECAT_PRODUCTS.premiumYearly,
+    cta: 'Jahresplan waehlen',
+    tone: 'yearly',
+    subtitle: 'Spare gegenueber monatlicher Zahlung.',
+    features: [
+      'Alle Premium-Vorteile',
+      'Guenstiger als monatlich',
+      'Ideal fuer Studium und Pruefungsphasen',
+      'Grosse Skripte langfristig planen',
+    ],
+  },
+];
+
+export default function PremiumScreen() {
+  const { colors, fontFamily } = useAppTheme();
+  const { user } = useAuth();
+  const subscription = useSubscription();
+  const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
+
+  async function buy(plan: PremiumPlan) {
+    if (!plan.productId) return;
+    setBusyPlan(plan.id);
+    try {
+      const result = await purchaseRevenueCatProduct(plan.productId, user?.id);
+      if (!result.configured) {
+        Alert.alert('Premium', 'Premium ist noch nicht vollstaendig eingerichtet. Bitte versuche es spaeter erneut.');
+      } else if (!result.cancelled) {
+        await subscription.refresh();
+        Alert.alert('Premium aktiv', 'Dein Plan wurde aktualisiert.');
+      }
+    } catch {
+      Alert.alert('Premium', 'Der Kauf konnte gerade nicht abgeschlossen werden. Bitte versuche es spaeter erneut.');
+    } finally {
+      setBusyPlan(null);
+    }
+  }
+
+  async function restore() {
+    setBusyPlan('restore');
+    try {
+      await restorePurchases(user?.id);
+      await subscription.refresh();
+      Alert.alert('Kaeufe wiederhergestellt', 'Dein Abo-Status wurde aktualisiert.');
+    } catch {
+      Alert.alert('Kaeufe wiederherstellen', 'Die Wiederherstellung konnte gerade nicht abgeschlossen werden.');
+    } finally {
+      setBusyPlan(null);
+    }
+  }
+
+  async function manageSubscription() {
+    try {
+      await openSubscriptionManagement();
+    } catch {
+      Alert.alert('Abo verwalten', 'Die Aboverwaltung konnte gerade nicht geoeffnet werden.');
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <Pressable onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="chevron-back-outline" size={18} color={colors.primary} />
+          <Text style={styles.backText}>Zurueck</Text>
+        </Pressable>
+
+        <Text style={styles.title}>Kalendulu Premium</Text>
+        <Text style={styles.subtitle}>
+          Lade grosse Skripte hoch, erhalte strukturierte Lernplaene und exportiere deinen Tagesplan.
+        </Text>
+
+        <View style={styles.planList}>
+          {PLANS.map((plan) => {
+            const current =
+              plan.id === 'yearly'
+                ? subscription.status.productId === plan.productId
+                : subscription.status.tier === plan.tier && (plan.tier !== 'premium' || subscription.status.productId !== REVENUECAT_PRODUCTS.premiumYearly);
+            const highlighted = plan.tone === 'premium' || plan.tone === 'yearly';
+            return (
+              <View
+                key={plan.id}
+                style={[
+                  styles.planCard,
+                  plan.tone === 'free' && styles.freeCard,
+                  plan.tone === 'premium' && styles.premiumCard,
+                  plan.tone === 'yearly' && styles.yearlyCard,
+                ]}
+              >
+                <View style={styles.planTop}>
+                  <View style={styles.planTitleWrap}>
+                    <Text style={styles.planTitle}>{plan.title}</Text>
+                    <Text style={styles.price}>{plan.price}</Text>
+                  </View>
+                  <Text style={[styles.badge, highlighted && styles.badgeStrong]}>{current ? 'Aktueller Plan' : plan.badge}</Text>
+                </View>
+                {plan.subtitle ? <Text style={styles.planSubtitle}>{plan.subtitle}</Text> : null}
+                <View style={styles.featureList}>
+                  {plan.features.map((feature) => (
+                    <View key={feature} style={styles.featureRow}>
+                      <Ionicons name="checkmark-circle-outline" size={18} color={highlighted ? colors.primary : colors.success} />
+                      <Text style={styles.featureText}>{feature}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Pressable
+                  disabled={!plan.productId || current || busyPlan !== null}
+                  onPress={() => void buy(plan)}
+                  style={[
+                    styles.cta,
+                    highlighted && styles.ctaStrong,
+                    (!plan.productId || current) && styles.ctaDisabled,
+                  ]}
+                >
+                  <Text style={[styles.ctaText, highlighted && styles.ctaStrongText]}>
+                    {busyPlan === plan.id ? 'Wird vorbereitet...' : current ? 'Aktueller Plan' : plan.cta}
+                  </Text>
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
+
+        <View style={styles.footerActions}>
+          <Pressable onPress={() => void restore()} disabled={busyPlan !== null} style={styles.secondaryAction}>
+            <Text style={styles.secondaryActionText}>{busyPlan === 'restore' ? 'Wird geprueft...' : 'Kaeufe wiederherstellen'}</Text>
+          </Pressable>
+          <Pressable onPress={() => void manageSubscription()} style={styles.secondaryAction}>
+            <Text style={styles.secondaryActionText}>Abo verwalten</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function makeStyles(
+  colors: ReturnType<typeof useAppTheme>['colors'],
+  fontFamily: ReturnType<typeof useAppTheme>['fontFamily'],
+) {
+  return StyleSheet.create({
+    safe: { flex: 1, backgroundColor: colors.background },
+    content: { padding: 18, paddingBottom: 120, gap: 16 },
+    backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start' },
+    backText: { color: colors.primary, fontWeight: '900', fontFamily: fontFamily.bold },
+    title: { color: colors.text, fontSize: 32, fontWeight: '900', fontFamily: fontFamily.bold },
+    subtitle: { color: colors.textMuted, fontSize: 15, lineHeight: 22, fontFamily: fontFamily.regular },
+    planList: { gap: 14 },
+    planCard: { backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, padding: 18, gap: 14 },
+    freeCard: { opacity: 0.92, backgroundColor: colors.cardSecondary },
+    premiumCard: { borderColor: colors.primary, borderWidth: 2 },
+    yearlyCard: { borderColor: colors.success, borderWidth: 2 },
+    planTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' },
+    planTitleWrap: { flex: 1 },
+    planTitle: { color: colors.text, fontSize: 22, fontWeight: '900', fontFamily: fontFamily.bold },
+    price: { color: colors.text, fontSize: 18, fontWeight: '900', marginTop: 4, fontFamily: fontFamily.bold },
+    badge: { color: colors.textMuted, backgroundColor: colors.cardSecondary, borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 6, fontSize: 12, fontWeight: '900', fontFamily: fontFamily.bold },
+    badgeStrong: { color: colors.primaryText, backgroundColor: colors.primary },
+    planSubtitle: { color: colors.textMuted, lineHeight: 20, fontFamily: fontFamily.regular },
+    featureList: { gap: 9 },
+    featureRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
+    featureText: { flex: 1, color: colors.text, lineHeight: 20, fontFamily: fontFamily.regular },
+    cta: { minHeight: 50, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card },
+    ctaStrong: { backgroundColor: colors.primary, borderColor: colors.primary },
+    ctaDisabled: { opacity: 0.55 },
+    ctaText: { color: colors.text, fontWeight: '900', fontFamily: fontFamily.bold },
+    ctaStrongText: { color: colors.primaryText },
+    footerActions: { gap: 10, marginTop: 4 },
+    secondaryAction: { minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
+    secondaryActionText: { color: colors.text, fontWeight: '900', fontFamily: fontFamily.bold },
+  });
+}
