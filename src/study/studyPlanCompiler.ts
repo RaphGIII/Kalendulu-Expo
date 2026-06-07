@@ -43,11 +43,16 @@ export function compileStudyPlan(input: {
     manualTopics: input.bundle.manualTopics,
     pastedText,
   });
+  const pageLearningSections = input.bundle.pageLearningSections ?? [];
+  const allSections = [
+    ...sections,
+    ...pageLearningSections.map((section, index) => ({ ...section, orderIndex: sections.length + index })),
+  ];
 
   const units = buildKnowledgeUnits({
     projectId: project.id,
-    sections: sections.length
-      ? sections
+    sections: allSections.length
+      ? allSections
       : [{ title: project.title, content: project.title, orderIndex: 0 }],
     targetLevel: input.targetLevel,
   });

@@ -7,6 +7,10 @@
     "OPENAI_MODEL_BALANCED": "gpt-5-mini",
     "OPENAI_MODEL_STRONG": "gpt-5",
     "OPENAI_STUDY_ENHANCEMENT_MAX_COST_USD": "0.002",
+    "OPENAI_STUDY_PAGE_MODEL": "gpt-5-nano",
+    "OPENAI_STUDY_PAGE_MAX_COST_USD": "0.05",
+    "OPENAI_STUDY_PAGE_INPUT_USD_PER_1M": "0.05",
+    "OPENAI_STUDY_PAGE_OUTPUT_USD_PER_1M": "0.40",
     "SUPABASE_URL": "https://poupgnhlapvgoeeqjbbe.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_m3tYbzYlg3UEwK81EvWZTw_de0W8iNy"
   }

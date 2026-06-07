@@ -3,78 +3,102 @@ import * as Sharing from 'expo-sharing';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-import type { StudyPlan, StudyProject, KnowledgeUnit, StudySession } from '../types';
+import type { StudyPlan, StudyProject, KnowledgeUnit } from '../types';
 
 function safeFilePart(value: string) {
   return value.replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').slice(0, 60);
 }
 
-function coverageLabel(status: KnowledgeUnit['coverageStatus']) {
-  if (status === 'core') return 'Kernstoff';
-  if (status === 'important') return 'Wichtig';
-  return 'Zusatz';
-}
-
-function sessionTypeLabel(type: StudySession['sessionType']) {
-  if (type === 'review') return 'Wiederholen';
-  if (type === 'catchup') return 'Nachholen';
-  if (type === 'quiz') return 'Quiz';
-  return 'Lernen';
-}
-
-function groupSessionsByDate(sessions: StudySession[]) {
-  const groups = new Map<string, StudySession[]>();
-  for (const session of sessions) {
-    const key = session.scheduledStart.slice(0, 10);
-    groups.set(key, [...(groups.get(key) ?? []), session]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, items]) => ({ date, sessions: items.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)) }));
-}
-
-function timeLabel(value: string) {
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
 function renderPlanText(project: StudyProject, units: KnowledgeUnit[], plan: StudyPlan) {
-  const unitNames = new Map(units.map((unit) => [unit.id, unit.title]));
-  const dayLines = groupSessionsByDate(plan.sessions).flatMap((day) => [
-    '',
-    day.date,
-    ...day.sessions.map(
-      (session) =>
-        `- ${timeLabel(session.scheduledStart)}-${timeLabel(session.scheduledEnd)} ${sessionTypeLabel(session.sessionType)}: ${session.title} (${session.estimatedMinutes} Min)`,
-    ),
-  ]);
-  const reviewLines = plan.repetitionItems.map((item) => {
-    const title = unitNames.get(item.unitId) ?? 'Lerneinheit';
-    return `- ${new Date(item.dueAt).toLocaleString()}: Wiederholen ${title} (${item.estimatedMinutes} Min)`;
+  const unitTitles = new Map(units.map((unit) => [unit.id, unit.title]));
+
+  const sessionsByDay = new Map<string, typeof plan.sessions>();
+
+  for (const session of plan.sessions) {
+    const key = session.scheduledStart.slice(0, 10);
+    sessionsByDay.set(key, [...(sessionsByDay.get(key) ?? []), session]);
+  }
+
+  const dayLines = [...sessionsByDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .flatMap(([dateKey, sessions]) => {
+      const title = new Date(`${dateKey}T12:00:00`).toLocaleDateString('de-DE', {
+        weekday: 'long',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      });
+
+      const sorted = sessions.sort((a, b) =>
+        a.scheduledStart.localeCompare(b.scheduledStart),
+      );
+
+      return [
+        '',
+        title,
+        ...sorted.map((session) => {
+          const start = new Date(session.scheduledStart).toLocaleTimeString('de-DE', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+
+          const end = new Date(session.scheduledEnd).toLocaleTimeString('de-DE', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+
+          const type = session.sessionType === 'review' ? 'Wiederholen' : 'Lernen';
+          const cleanTitle = session.title
+            .replace(/^Lernen:\s*/i, '')
+            .replace(/^Wiederholen:\s*/i, '');
+
+          return `- ${start}-${end}: ${type}: ${cleanTitle} (${session.estimatedMinutes} Min)`;
+        }),
+      ];
+    });
+
+  const repetitionLines = plan.repetitionItems.map((item) => {
+    const title = unitTitles.get(item.unitId) ?? 'Lerneinheit';
+
+    return `- ${new Date(item.dueAt).toLocaleDateString('de-DE')}: ${title} wiederholen (${item.estimatedMinutes} Min)`;
   });
+
   const lines = [
     'Kalendulu Lernplan',
     '',
     `Projekt: ${project.title}`,
-    `Pruefung: ${project.examDate ?? 'ohne Datum'}`,
+    `Prüfung: ${project.examDate ?? 'ohne Datum'}`,
     `Zielniveau: ${project.targetLevel}`,
     `Gesamtaufwand: ${plan.requiredMinutes} Minuten`,
-    `Verfuegbare Zeit: ${plan.availableMinutes} Minuten`,
+    `Verfügbare Zeit: ${plan.availableMinutes} Minuten`,
     `Machbarkeit: ${plan.feasible ? 'realistisch' : 'eng'}`,
     '',
-    'Priorisierte Stoffuebersicht',
-    ...units.map(
-      (unit) =>
-        `- ${unit.title} (${coverageLabel(unit.coverageStatus)}, Schwierigkeit ${unit.difficulty}/5, Wichtigkeit ${unit.importance}/5, ${unit.estimatedMinutes} Min)`,
-    ),
+    'Priorisierte Stoffübersicht',
+    ...units.map((unit) => {
+      const label =
+        unit.coverageStatus === 'core'
+          ? 'Kernstoff'
+          : unit.coverageStatus === 'important'
+            ? 'Wichtig'
+            : 'Zusatz';
+
+      const page =
+        unit.sourcePageStart || unit.sourcePageEnd
+          ? `, Seite ${unit.sourcePageStart ?? unit.sourcePageEnd}${unit.sourcePageEnd && unit.sourcePageEnd !== unit.sourcePageStart ? `-${unit.sourcePageEnd}` : ''}`
+          : '';
+
+      return `- ${unit.title} (${label}, Schwierigkeit ${unit.difficulty}/5, Wichtigkeit ${unit.importance}/5, ${unit.estimatedMinutes} Min${page})`;
+    }),
     '',
     'Tagesplan',
     ...dayLines,
     '',
-    'Spaced Repetition',
-    ...reviewLines,
+    'Wiederholungsplan',
+    ...repetitionLines,
     '',
     'Hinweis: Dieser Lernplan wurde aus deinen Angaben algorithmisch erstellt.',
   ];
+
   return lines.join('\n');
 }
 

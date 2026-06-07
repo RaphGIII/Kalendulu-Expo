@@ -7,6 +7,8 @@ type OpenAiChatJsonParams = {
   maxCompletionTokens?: number;
 };
 
+import { parseJsonFromModelResponse } from '../jsonParsing';
+
 export async function callOpenAiJsonText(params: OpenAiChatJsonParams) {
   const body: Record<string, unknown> = {
     model: params.model,
@@ -37,11 +39,11 @@ export async function callOpenAiJsonText(params: OpenAiChatJsonParams) {
     throw new Error(`OpenAI error ${res.status}: ${raw}`);
   }
 
-  const parsed = JSON.parse(raw) as {
+  const parsed = parseJsonFromModelResponse<{
     choices?: Array<{ message?: { content?: string } }>;
-  };
+  }>(raw);
 
-  const content = parsed.choices?.[0]?.message?.content;
+  const content = parsed?.choices?.[0]?.message?.content;
   if (!content) {
     throw new Error('OpenAI returned empty content.');
   }

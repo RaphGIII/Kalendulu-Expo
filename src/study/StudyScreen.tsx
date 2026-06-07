@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import * as DocumentPicker from 'expo-document-picker';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import dayjs from 'dayjs';
 import 'dayjs/locale/de';
 import { router } from 'expo-router';
@@ -39,17 +40,15 @@ import {
   isSupportedStudyFile,
   loadStudyProgressSteps,
   loadStudyUsage,
-  generateSpacedRepetition,
   loadStudyData,
   saveStudyProjectBundle,
-  scheduleStudyPlan,
-  toggleKnowledgeUnit,
   updateStudyDay,
   updateStudySession,
   validateStudyFileAgainstTier,
   addStudyUsagePages,
   completeStudyProgressStep,
   type KnowledgeUnit,
+  type DetectedStudySection,
   type StudyBuildResult,
   type StudyPlan,
   type StudyProgressStep,
@@ -62,6 +61,7 @@ import {
 import { exportStudyPlanAsDocx, exportStudyPlanAsPdf } from './export/studyPlanExportClient';
 
 type Mode = 'home' | 'create' | 'preview' | 'detail';
+type MaterialInputMode = 'topics' | 'text' | 'files';
 type EditScope = 'preview' | 'detail';
 type DayDraft = {
   scope: EditScope;
@@ -86,6 +86,9 @@ type SessionDraft = {
 
 dayjs.locale('de');
 
+const FORCE_PREMIUM_FOR_LOCAL_TESTING = true;
+
+
 function minutesLabel(minutes: number) {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
@@ -98,6 +101,99 @@ function splitTopics(value: string) {
     .split('\n')
     .map((line) => line.replace(/^[-*•\d.)\s]+/, '').trim())
     .filter(Boolean);
+}
+
+function normalizeStudyRelevanceText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/ß/g, 'ss');
+}
+
+const STUDY_RELEVANCE_WORDS = [
+  'definition', 'funktion', 'struktur', 'system', 'modell', 'theorie', 'konzept', 'prinzip',
+  'mechanismus', 'ursache', 'folge', 'prozess', 'entwicklung', 'klassifikation', 'diagnostik',
+  'therapie', 'klinik', 'pathophysiologie', 'histologie', 'anatomie', 'physiologie', 'biochemie',
+  'embryologie', 'topographie', 'innervation', 'versorgung', 'arterie', 'vene', 'nerv', 'muskel',
+  'organ', 'zelle', 'gewebe', 'rezeptor', 'enzym', 'hormon', 'signalweg', 'syndrom', 'symptom',
+  'prüfung', 'pruefung', 'merke', 'wichtig', 'lernziel', 'kapitel', 'übersicht', 'übersicht',
+];
+
+const STUDY_NOISE_WORDS = [
+  'raphael gmeiner', 'matrikelnummer', 'studentennummer', 'semester', 'email', 'e-mail',
+  'universität', 'universitaet', 'friedrich-schiller', 'dozent', 'professor', 'copyright',
+  'downloaded', 'generated', 'erstellt von', 'bearbeitet von', 'seite ', 'lecture notes',
+  'slide ', 'foliennummer', 'datum', 'name:', 'vorname', 'nachname', 'adresse',
+];
+
+function looksLikeOnlyPersonName(line: string) {
+  const words = line.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2 || words.length > 4) return false;
+  const capitalized = words.filter((word) => /^[A-ZÄÖÜ][a-zäöüß-]{2,}$/.test(word)).length;
+  const hasStudySignal = STUDY_RELEVANCE_WORDS.some((word) => normalizeStudyRelevanceText(line).includes(normalizeStudyRelevanceText(word)));
+  return capitalized === words.length && !hasStudySignal;
+}
+
+function studyLineScore(line: string) {
+  const clean = normalizeStudyRelevanceText(line);
+  const alphaCount = (line.match(/[A-Za-zÄÖÜäöüß]/g) ?? []).length;
+  const tokenCount = (line.match(/[A-Za-zÄÖÜäöüß]{3,}/g) ?? []).length;
+  const studySignals = STUDY_RELEVANCE_WORDS.filter((word) => clean.includes(normalizeStudyRelevanceText(word))).length;
+  const hasColonStructure = /[:;]/.test(line) && tokenCount >= 3;
+  const hasAcademicPattern = /\b([A-ZÄÖÜ][a-zäöüß]+\s+[a-zäöüß]+|[a-zäöüß]+ung|[a-zäöüß]+tion|[a-zäöüß]+ismus)\b/.test(line);
+  const listLike = /^[-*•]\s+/.test(line) || /,/.test(line);
+
+  let score = 0;
+  score += Math.min(4, studySignals * 2);
+  score += tokenCount >= 6 ? 2 : 0;
+  score += tokenCount >= 12 ? 2 : 0;
+  score += hasColonStructure ? 1 : 0;
+  score += hasAcademicPattern ? 1 : 0;
+  score += listLike ? 1 : 0;
+  score += alphaCount > 40 ? 1 : 0;
+
+  if (STUDY_NOISE_WORDS.some((word) => clean.includes(normalizeStudyRelevanceText(word)))) score -= 4;
+  if (looksLikeOnlyPersonName(line)) score -= 5;
+  if ((line.match(/\d/g) ?? []).length > line.length * 0.35) score -= 2;
+  if (/^[\W_\d]+$/.test(line)) score -= 6;
+  if (/https?:\/\//i.test(line) || /www\./i.test(line)) score -= 6;
+
+  return score;
+}
+
+function sanitizeExtractedStudyText(value: string) {
+  const lines = value
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  const cleaned = lines.filter((line) => {
+    const lower = line.toLowerCase();
+    if (line.length < 3) return false;
+    if (/^\d+$/.test(line)) return false;
+    if (/^seite\s+\d+/i.test(line)) return false;
+    if (/^(abb\.|fig\.|figure|table|tabelle)\s*\d+/i.test(line) && line.length < 40) return false;
+    if (/https?:\/\//i.test(line) || /www\./i.test(line)) return false;
+    if (/^[\W_\d]+$/.test(line)) return false;
+    if ((line.match(/\d/g) ?? []).length > line.length * 0.45) return false;
+    if ((line.match(/[A-Za-zÄÖÜäöüß]/g) ?? []).length < 3) return false;
+    if (lower.includes('copyright') || lower.includes('all rights reserved')) return false;
+    if (lower.includes('downloaded from') || lower.includes('generated by')) return false;
+    if (looksLikeOnlyPersonName(line)) return false;
+    return studyLineScore(line) >= 0;
+  });
+
+  return cleaned.join('\n');
+}
+
+function combineStudyText(...parts: (string | undefined)[]) {
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join('\n\n');
 }
 
 function unitNameMap(units: KnowledgeUnit[]) {
@@ -123,45 +219,15 @@ function sessionTypeLabel(type: StudySession['sessionType']) {
   return 'Lernen';
 }
 
-function sourcePagesLabel(unit: KnowledgeUnit) {
-  if (unit.sourcePageStart && unit.sourcePageEnd && unit.sourcePageStart !== unit.sourcePageEnd) {
-    return `Seiten ${unit.sourcePageStart}-${unit.sourcePageEnd}`;
-  }
-  if (unit.sourcePageStart) return `Seite ${unit.sourcePageStart}`;
-  return null;
-}
-
 function sessionTimeLabel(session: StudySession) {
   return `${dayjs(session.scheduledStart).format('HH:mm')}-${dayjs(session.scheduledEnd).format('HH:mm')}`;
-}
-
-function groupSessionsByDay(sessions: StudySession[]) {
-  const groups = new Map<string, StudySession[]>();
-  for (const session of sessions) {
-    const key = dayjs(session.scheduledStart).format('YYYY-MM-DD');
-    groups.set(key, [...(groups.get(key) ?? []), session]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, items]) => ({
-      date,
-      label: dayjs(date).format('dddd, DD. MMMM'),
-      sessions: items.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)),
-    }));
-}
-
-function dayLearningSummary(sessions: StudySession[]) {
-  const learning = sessions.filter((session) => session.sessionType !== 'review').length;
-  const reviews = sessions.filter((session) => session.sessionType === 'review').length;
-  const minutes = sessions.reduce((sum, session) => sum + session.estimatedMinutes, 0);
-  return `${minutesLabel(minutes)} - ${sessions.length} Sessions - ${learning} Lernen - ${reviews} Wiederholen`;
 }
 
 function progressStatusLabel(status: StudyProgressStep['status']) {
   if (status === 'done') return 'Erledigt';
   if (status === 'missed') return 'Verpasst';
   if (status === 'rescheduled') return 'Verschoben';
-  if (status === 'deleted') return 'Geloescht';
+  if (status === 'deleted') return 'Gelöscht';
   return 'Offen';
 }
 
@@ -169,13 +235,6 @@ function feasibilityTone(plan: StudyPlan): 'success' | 'warning' | 'danger' {
   if (plan.feasible) return 'success';
   if ((plan.overloadMinutes ?? 0) <= plan.availableMinutes * 0.25) return 'warning';
   return 'danger';
-}
-
-function feasibilityTitle(plan: StudyPlan) {
-  const tone = feasibilityTone(plan);
-  if (tone === 'success') return 'Realistisch';
-  if (tone === 'warning') return 'Knapp, aber steuerbar';
-  return 'Zu viel Stoff fuer die verfuegbare Zeit';
 }
 
 function rebuildPlanForSessions(plan: StudyPlan, sessions: StudySession[]): StudyPlan {
@@ -241,16 +300,17 @@ function buildStudyAppBundle(input: {
 
   const todos: PsycheSuggestedTodo[] = [];
   for (const session of input.plan.sessions) {
+    const dayLabel = dayjs(session.scheduledStart).format('DD.MM.YYYY');
     for (const title of session.todoTitles) {
-      const fullTitle = `${input.project.title}: ${title}`;
+      const fullTitle = `Lerntag ${dayLabel}: ${title}`;
       if (input.existingTodoTitles.has(fullTitle)) continue;
       input.existingTodoTitles.add(fullTitle);
       todos.push({
         id: `study_todo_${session.id}_${todos.length}`,
         title: fullTitle,
-        reason: 'Aus dem Lernplan erzeugt.',
+        reason: `${input.project.title} · Lerntag ${dayLabel}`,
         priority: session.sessionType === 'review' ? 'medium' : 'high',
-        subcategory: 'Lernen',
+        subcategory: `Lerntag ${dayLabel}`,
         estimatedMinutes: session.estimatedMinutes,
       });
     }
@@ -274,12 +334,12 @@ function buildStudyAppBundle(input: {
     });
 
   const habits: PsycheSuggestedHabit[] = [];
-  const recallHabit = `${input.project.title}: Taeglicher Active Recall`;
+  const recallHabit = `${input.project.title}: Täglicher Active Recall`;
   if (!input.existingHabitTitles.has(recallHabit)) {
     habits.push({
       id: `study_habit_${input.project.id}`,
       title: recallHabit,
-      reason: 'Kurze taegliche Wiederholung stabilisiert den Lernplan.',
+      reason: 'Kurze tägliche Wiederholung stabilisiert den Lernplan.',
       description: '10 Minuten Active Recall oder Karteikarten ohne Unterlagen.',
       cadence: 'daily',
       durationMinutes: 10,
@@ -292,11 +352,79 @@ function buildStudyAppBundle(input: {
 
   return { todos, habits, calendarBlocks };
 }
+function getStudyDateKey(iso: string) {
+  return iso.slice(0, 10);
+}
 
+function formatStudyDateTitle(dateKey: string) {
+  return new Date(`${dateKey}T12:00:00`).toLocaleDateString('de-DE', {
+    weekday: 'long',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function groupSessionsByStudyDay(plan: StudyPlan | null | undefined) {
+  if (!plan) return [];
+
+  const byDay = new Map<string, StudySession[]>();
+
+  for (const session of plan.sessions) {
+    const key = getStudyDateKey(session.scheduledStart);
+    byDay.set(key, [...(byDay.get(key) ?? []), session]);
+  }
+
+  const learnedUnits = new Set<string>();
+
+  return [...byDay.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([dateKey, sessions]) => {
+      const sorted = sessions.sort((a, b) =>
+        a.scheduledStart.localeCompare(b.scheduledStart),
+      );
+
+      const learn = sorted.filter((session) => session.sessionType !== 'review');
+      const review = sorted.filter((session) =>
+        session.sessionType === 'review' &&
+        session.unitIds.some((unitId) => learnedUnits.has(unitId)),
+      );
+      learn.forEach((session) => session.unitIds.forEach((unitId) => learnedUnits.add(unitId)));
+
+      return {
+        dateKey,
+        sessions: sorted,
+        learn,
+        review,
+        totalMinutes: sorted.reduce(
+          (sum, session) => sum + session.estimatedMinutes,
+          0,
+        ),
+      };
+    });
+}
 export default function StudyScreen() {
   const { colors, fontFamily } = useAppTheme();
   const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
   const { status: subscription, limits } = useSubscription();
+  const activeStudyTier = FORCE_PREMIUM_FOR_LOCAL_TESTING ? 'premium' : subscription.tier;
+  const activeLimits = useMemo(() => {
+    if (!FORCE_PREMIUM_FOR_LOCAL_TESTING) return limits;
+
+    return {
+      ...limits,
+      tier: 'premium' as const,
+      label: 'Premium Test',
+      maxPagesPerFile: 300,
+      maxPagesPerMonth: 1000,
+      maxFileSizeMb: 100,
+      maxActiveProjects: 100,
+      allowAiEnhancement: true,
+      allowPdfExport: true,
+      allowDocxExport: true,
+      allowLargeDocuments: true,
+    };
+  }, [limits]);
 
   const [mode, setMode] = useState<Mode>('home');
   const [projects, setProjects] = useState<StudyProject[]>([]);
@@ -304,20 +432,26 @@ export default function StudyScreen() {
   const [plans, setPlans] = useState<StudyPlan[]>([]);
   const [progressSteps, setProgressSteps] = useState<StudyProgressStep[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [expandedStudyDay, setExpandedStudyDay] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
   const [examDate, setExamDate] = useState('');
   const [targetLevel, setTargetLevel] = useState<StudyTargetLevel>('good');
-  const [weeklyMinutes, setWeeklyMinutes] = useState('480');
+  const [weeklyHours, setWeeklyHours] = useState('8');
   const [availableDaysPerWeek, setAvailableDaysPerWeek] = useState('5');
   const [minutesPerDay, setMinutesPerDay] = useState('90');
-  const [preferredTime, setPreferredTime] = useState<'morning' | 'midday' | 'evening' | 'flexible'>('evening');
-  const [maxSessionMinutes, setMaxSessionMinutes] = useState('60');
+  const [materialInputMode, setMaterialInputMode] = useState<MaterialInputMode>('topics');
   const [manualTopicsText, setManualTopicsText] = useState('');
   const [pastedText, setPastedText] = useState('');
+  const [extractedMaterialText, setExtractedMaterialText] = useState('');
+  const [extractedSections, setExtractedSections] = useState<DetectedStudySection[]>([]);
   const [files, setFiles] = useState<TemporaryStudyAsset[]>([]);
   const [uploadMessages, setUploadMessages] = useState<string[]>([]);
   const [preview, setPreview] = useState<StudyBuildResult | null>(null);
+  const [showExamPicker, setShowExamPicker] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  const scrollRef = useRef<React.ElementRef<typeof ScrollView> | null>(null);
   const [dayDraft, setDayDraft] = useState<DayDraft | null>(null);
   const [sessionDraft, setSessionDraft] = useState<SessionDraft | null>(null);
 
@@ -333,12 +467,14 @@ export default function StudyScreen() {
     return plans.flatMap((plan) => plan.sessions).filter((session) => session.scheduledStart.slice(0, 10) === today);
   }, [plans]);
 
-  const upcomingReviews = useMemo(() => {
-    return plans
-      .flatMap((plan) => plan.repetitionItems)
-      .filter((item) => item.status !== 'done')
-      .sort((a, b) => a.dueAt.localeCompare(b.dueAt))
-      .slice(0, 5);
+  const totalOpenStudyDays = useMemo(() => {
+    const dayKeys = new Set<string>();
+    plans.forEach((plan) => {
+      plan.sessions
+        .filter((session) => !session.completed)
+        .forEach((session) => dayKeys.add(session.scheduledStart.slice(0, 10)));
+    });
+    return dayKeys.size;
   }, [plans]);
 
   async function reload() {
@@ -361,13 +497,14 @@ export default function StudyScreen() {
     setTitle('');
     setExamDate('');
     setTargetLevel('good');
-    setWeeklyMinutes('480');
+    setWeeklyHours('8');
     setAvailableDaysPerWeek('5');
     setMinutesPerDay('90');
-    setPreferredTime('evening');
-    setMaxSessionMinutes('60');
+    setMaterialInputMode('topics');
     setManualTopicsText('');
     setPastedText('');
+    setExtractedMaterialText('');
+    setExtractedSections([]);
     setFiles([]);
     setUploadMessages([]);
     setPreview(null);
@@ -376,7 +513,7 @@ export default function StudyScreen() {
   function showInactiveMediaMessage() {
     Alert.alert(
       'Texterkennung noch nicht aktiv',
-      'Texterkennung fuer Fotos, gescannte PDFs und PPTX ist noch nicht aktiviert. Bitte nutze aktuell PDFs mit auswaehlbarem Text, DOCX-Dateien oder manuell eingegebene Themen.',
+      'Texterkennung für Fotos und gescannte PDFs ist noch nicht aktiviert. Bitte nutze aktuell PDFs mit auswählbarem Text, DOCX-, PPTX-Dateien oder manuell eingegebene Themen.',
     );
   }
 
@@ -384,11 +521,22 @@ export default function StudyScreen() {
     const copy = PAYWALL_COPY[reason];
     Alert.alert(copy.title, extra ? `${copy.body}\n\n${extra}` : copy.body, [
       {
-        text: 'Plaene ansehen',
+        text: 'Pläne ansehen',
         onPress: () => router.push('/premium'),
       },
       { text: 'Nicht jetzt', style: 'cancel' },
     ]);
+  }
+
+  function handleExamDateChange(_event: DateTimePickerEvent, selectedDate?: Date) {
+    setShowExamPicker(false);
+    if (!selectedDate) return;
+    setExamDate(dayjs(selectedDate).format('YYYY-MM-DD'));
+  }
+
+  async function advanceAnalysisProgress(target: number) {
+    setAnalysisProgress((prev) => Math.max(prev, Math.min(100, target)));
+    await new Promise((resolve) => setTimeout(resolve, 160));
   }
 
   async function addFile() {
@@ -398,6 +546,7 @@ export default function StudyScreen() {
         'text/markdown',
         'application/pdf',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       ],
       multiple: true,
       copyToCacheDirectory: true,
@@ -416,7 +565,7 @@ export default function StudyScreen() {
 
       const estimatedPages = estimatePagesFromFile({ name: asset.name, size: asset.size });
       const validation = validateStudyFileAgainstTier({
-        tier: subscription.tier,
+        tier: activeStudyTier,
         name: asset.name,
         size: asset.size,
         estimatedPages,
@@ -441,9 +590,18 @@ export default function StudyScreen() {
     setFiles((prev) => [...prev, ...newFiles]);
 
     for (const file of newFiles) {
-      const extracted = await extractTextFromFile({ ...file, tier: subscription.tier });
+      const extracted = await extractTextFromFile({ ...file, tier: activeStudyTier });
+      if (extracted.sections?.length) {
+        setExtractedSections((prev) => [
+          ...prev,
+          ...extracted.sections!.map((section, index) => ({ ...section, orderIndex: prev.length + index })),
+        ]);
+      }
       if (extracted.text) {
-        setPastedText((prev) => `${prev.trim()}\n\n${extracted.text}`.trim());
+        const cleanedText = sanitizeExtractedStudyText(extracted.text);
+        if (cleanedText) {
+          setExtractedMaterialText((prev) => combineStudyText(prev, cleanedText));
+        }
       }
       if (extracted.message) {
         const message = extracted.message;
@@ -460,65 +618,79 @@ export default function StudyScreen() {
   async function analyze() {
     const cleanTitle = title.trim();
     if (!cleanTitle) {
-      Alert.alert('Titel fehlt', 'Bitte gib einen Titel fuer das Lernprojekt ein.');
+      Alert.alert('Titel fehlt', 'Bitte gib einen Titel für das Lernprojekt ein.');
       return;
     }
 
     const manualTopics = splitTopics(manualTopicsText);
-    if (!manualTopics.length && !pastedText.trim() && !files.length) {
-      Alert.alert('Stoff fehlt', 'Bitte gib mindestens eine Themenliste, Text, Fotos oder Dateien ein.');
+    const combinedText = combineStudyText(pastedText, extractedMaterialText);
+
+    if (!manualTopics.length && !combinedText.trim() && !extractedSections.length && !files.length) {
+      Alert.alert('Stoff fehlt', 'Bitte gib mindestens eine Themenliste, Text oder eine Datei ein.');
       return;
     }
 
+    const weeklyAvailableMinutes = Math.max(1, Number(weeklyHours) || 8) * 60;
+    const minutesPerLearningDay = Math.max(15, Number(minutesPerDay) || 90);
+
     const availability = {
       availableDaysPerWeek: Math.max(1, Math.min(7, Number(availableDaysPerWeek) || 5)),
-      minutesPerDay: Math.max(15, Number(minutesPerDay) || 90),
-      preferredTime,
+      minutesPerDay: minutesPerLearningDay,
+      preferredTime: 'flexible' as const,
       excludedWeekdays: [] as number[],
-      maxSessionMinutes: Math.max(25, Number(maxSessionMinutes) || 60),
+      maxSessionMinutes: Math.max(25, Math.min(60, minutesPerLearningDay)),
     };
 
-    let result = compileStudyPlan({
-      title: cleanTitle,
-      examDate: examDate.trim() || undefined,
-      targetLevel,
-      weeklyAvailableMinutes: Number(weeklyMinutes) || 480,
-      availability,
-      bundle: {
-        manualTopics,
-        pastedText,
-        uploadedImages: [],
-        uploadedFiles: files,
-      },
-    });
+    try {
+      setIsAnalyzing(true);
+      setAnalysisProgress(4);
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      await advanceAnalysisProgress(18);
 
-    if (limits.allowAiEnhancement) {
-      const enhanced = await enhanceStudyBuildWithAi(result);
-      result = enhanced.result;
-      setUploadMessages((prev) => [...prev, enhanced.message]);
+      let result = compileStudyPlan({
+        title: cleanTitle,
+        examDate: examDate.trim() || undefined,
+        targetLevel,
+        weeklyAvailableMinutes,
+        availability,
+        bundle: {
+          manualTopics,
+          pastedText: combinedText,
+          pageLearningSections: extractedSections,
+          uploadedImages: [],
+          uploadedFiles: files,
+        },
+      });
+
+      await advanceAnalysisProgress(58);
+
+      try {
+        const enhanced = await enhanceStudyBuildWithAi(result);
+        result = enhanced.result;
+        const message = enhanced.message?.replace(/Premium-KI/g, 'KI-Veredelung');
+        if (typeof message === 'string' && message.trim().length > 0) {
+          setUploadMessages((prev) => [...prev, message]);
+        }
+      } catch {
+        setUploadMessages((prev) => [
+          ...prev,
+          'Der algorithmische Lernplan wurde erstellt. Die KI-Veredelung war gerade nicht verfügbar.',
+        ]);
+      }
+
+      await advanceAnalysisProgress(88);
+      setPreview(result);
+      setMode('preview');
+      setExpandedStudyDay(null);
+      await advanceAnalysisProgress(100);
+      setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 80);
+    } finally {
+      setTimeout(() => {
+        setIsAnalyzing(false);
+        setAnalysisProgress(0);
+      }, 250);
     }
 
-    setPreview(result);
-    setMode('preview');
-  }
-
-  function rebuildPreviewWithUnits(nextUnits: KnowledgeUnit[]) {
-    if (!preview) return;
-    const repetitionItems = generateSpacedRepetition({
-      projectId: preview.project.id,
-      units: nextUnits,
-      examDate: preview.project.examDate,
-    });
-    const plan = scheduleStudyPlan({
-      projectId: preview.project.id,
-      units: nextUnits,
-      repetitionItems,
-      weeklyAvailableMinutes: preview.project.weeklyAvailableMinutes,
-      availability: preview.project.availability,
-      targetLevel: preview.project.targetLevel,
-      examDate: preview.project.examDate,
-    });
-    setPreview({ ...preview, units: nextUnits, plan });
   }
 
   function replacePreviewSessions(nextSessions: StudySession[]) {
@@ -573,12 +745,12 @@ export default function StudyScreen() {
 
   function confirmDeleteDay(scope: EditScope, projectId: string, date: string) {
     Alert.alert(
-      'Diesen Lerntag loeschen?',
+      'Diesen Lerntag löschen?',
       'Alle geplanten Sessions, Todos und Fortschrittsschritte dieses Tages werden entfernt.',
       [
         { text: 'Abbrechen', style: 'cancel' },
         {
-          text: 'Lerntag loeschen',
+          text: 'Lerntag löschen',
           style: 'destructive',
           onPress: () => {
             if (scope === 'preview' && preview) {
@@ -641,10 +813,10 @@ export default function StudyScreen() {
   }
 
   function confirmDeleteSession(scope: EditScope, session: StudySession) {
-    Alert.alert('Lernsession loeschen?', 'Diese Session und der zugehoerige Fortschrittsschritt werden entfernt.', [
+    Alert.alert('Lernsession löschen?', 'Diese Session und der zugehörige Fortschrittsschritt werden entfernt.', [
       { text: 'Abbrechen', style: 'cancel' },
       {
-        text: 'Session loeschen',
+        text: 'Session löschen',
         style: 'destructive',
         onPress: () => {
           if (scope === 'preview' && preview) {
@@ -666,6 +838,118 @@ export default function StudyScreen() {
     await reload();
   }
 
+  function getSessionUnits(session: StudySession, availableUnits: KnowledgeUnit[]) {
+    const byId = new Map(availableUnits.map((unit) => [unit.id, unit]));
+    return session.unitIds.map((id) => byId.get(id)).filter((unit): unit is KnowledgeUnit => Boolean(unit));
+  }
+
+  function sessionHintLines(session: StudySession, availableUnits: KnowledgeUnit[]) {
+    const relatedUnits = getSessionUnits(session, availableUnits);
+    const hints = relatedUnits.flatMap((unit) => {
+      if (unit.bulletPoints?.length) return unit.bulletPoints;
+      const summaryLines = (unit.summary ?? '')
+        .split(/\n+/)
+        .map((line) => line.replace(/^[-*•]\s*/, '').trim())
+        .filter(Boolean);
+      const keywordLines = unit.keywords?.slice(0, 5).map((keyword) => `Achte auf ${keyword}`) ?? [];
+
+      return [...summaryLines, ...keywordLines];
+    });
+
+    const cleanedHints = [...new Set(hints)]
+      .filter((line) => line.length >= 3)
+      .filter((line) => !/^unit_/i.test(line))
+      .slice(0, 6);
+
+    if (cleanedHints.length) return cleanedHints;
+    return session.todoTitles.map((title) => title.replace(/^.*?:\s*/, '')).slice(0, 3);
+  }
+
+  function renderStudyDayCards(input: { scope: EditScope; projectId: string; plan: StudyPlan; availableUnits: KnowledgeUnit[] }) {
+    const days = groupSessionsByStudyDay(input.plan);
+
+    if (!days.length) {
+      return <Text style={styles.emptyText}>Keine geplanten Lerntage.</Text>;
+    }
+
+    return days.map((day) => {
+      const expanded = expandedStudyDay === `${input.scope}_${day.dateKey}`;
+      const expandedKey = `${input.scope}_${day.dateKey}`;
+
+      return (
+        <View key={expandedKey} style={styles.studyDayCard}>
+          <Pressable
+            onPress={() => setExpandedStudyDay(expanded ? null : expandedKey)}
+            style={styles.studyDayHeader}
+          >
+            <View style={styles.dayHeaderText}>
+              <Text style={styles.studyDayTitle}>{formatStudyDateTitle(day.dateKey)}</Text>
+            </View>
+            <Text style={styles.studyDayChevron}>{expanded ? '−' : '+'}</Text>
+          </Pressable>
+
+          {expanded ? (
+            <View style={styles.studyDayDetails}>
+              <View style={styles.dayManagementRow}>
+                <Pressable onPress={() => openDayEditor(input.scope, input.projectId, day.dateKey, day.sessions)} style={styles.miniBtn}>
+                  <Text style={styles.miniBtnText}>Tag bearbeiten</Text>
+                </Pressable>
+                <Pressable onPress={() => openSessionEditor(input.scope, input.projectId, undefined, day.dateKey)} style={styles.miniBtn}>
+                  <Text style={styles.miniBtnText}>Session hinzufügen</Text>
+                </Pressable>
+                <Pressable onPress={() => confirmDeleteDay(input.scope, input.projectId, day.dateKey)} style={styles.dangerPillBtn}>
+                  <Text style={styles.dangerText}>Tag löschen</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.learnBlock}>
+                <Text style={styles.dayBlockTitle}>Lernen</Text>
+                {day.learn.length ? day.learn.map((session) => (
+                  <View key={session.id} style={styles.daySessionCard}>
+                    <View style={styles.sessionHeader}>
+                      <Text style={styles.sessionTime}>{sessionTimeLabel(session)}</Text>
+                      <Text style={styles.sessionBadge}>{sessionTypeLabel(session.sessionType)}</Text>
+                    </View>
+                    <Text style={styles.sessionTitle}>{session.title.replace(/^Lernen:\s*/i, '')}</Text>
+                    {sessionHintLines(session, input.availableUnits).map((hint, index) => (
+                      <Text key={`${session.id}_hint_${index}`} style={styles.hintText}>• {hint}</Text>
+                    ))}
+                    <View style={styles.sessionActions}>
+                      <Pressable onPress={() => openSessionEditor(input.scope, input.projectId, session)}><Text style={styles.linkText}>Bearbeiten</Text></Pressable>
+                      <Pressable onPress={() => void completeSession(input.scope, session)}><Text style={styles.linkText}>Erledigt</Text></Pressable>
+                      <Pressable onPress={() => confirmDeleteSession(input.scope, session)}><Text style={styles.removeText}>Löschen</Text></Pressable>
+                    </View>
+                  </View>
+                )) : <Text style={styles.emptyDayText}>An diesem Tag ist kein neues Lernen geplant.</Text>}
+              </View>
+
+              <View style={styles.reviewBlock}>
+                <Text style={styles.dayBlockTitle}>Wiederholen</Text>
+                {day.review.length ? day.review.map((session) => (
+                  <View key={session.id} style={styles.daySessionCard}>
+                    <View style={styles.sessionHeader}>
+                      <Text style={styles.sessionTime}>{sessionTimeLabel(session)}</Text>
+                      <Text style={styles.sessionBadge}>Wiederholen</Text>
+                    </View>
+                    <Text style={styles.sessionTitle}>{session.title.replace(/^Wiederholen:\s*/i, '').replace(/^Review:\s*/i, '')}</Text>
+                    {sessionHintLines(session, input.availableUnits).map((hint, index) => (
+                      <Text key={`${session.id}_review_hint_${index}`} style={styles.hintText}>• {hint}</Text>
+                    ))}
+                    <View style={styles.sessionActions}>
+                      <Pressable onPress={() => openSessionEditor(input.scope, input.projectId, session)}><Text style={styles.linkText}>Bearbeiten</Text></Pressable>
+                      <Pressable onPress={() => void completeSession(input.scope, session)}><Text style={styles.linkText}>Erledigt</Text></Pressable>
+                      <Pressable onPress={() => confirmDeleteSession(input.scope, session)}><Text style={styles.removeText}>Löschen</Text></Pressable>
+                    </View>
+                  </View>
+                )) : <Text style={styles.emptyDayText}>An diesem Tag ist keine Wiederholung geplant.</Text>}
+              </View>
+            </View>
+          ) : null}
+        </View>
+      );
+    });
+  }
+
   function renderStudyEditors() {
     return (
       <>
@@ -676,7 +960,7 @@ export default function StudyScreen() {
             <TextInput value={dayDraft.nextDate} onChangeText={(nextDate) => setDayDraft({ ...dayDraft, nextDate })} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} style={styles.input} />
             <Text style={styles.label}>Startzeit</Text>
             <TextInput value={dayDraft.startTime} onChangeText={(startTime) => setDayDraft({ ...dayDraft, startTime })} placeholder="18:00" placeholderTextColor={colors.textMuted} style={styles.input} />
-            <Text style={styles.label}>Verfuegbare Gesamtzeit in Minuten</Text>
+            <Text style={styles.label}>Verfügbare Gesamtzeit in Minuten</Text>
             <TextInput value={dayDraft.availableMinutes} onChangeText={(availableMinutes) => setDayDraft({ ...dayDraft, availableMinutes })} keyboardType="numeric" placeholder="90" placeholderTextColor={colors.textMuted} style={styles.input} />
             <View style={styles.actionRow}>
               <Pressable onPress={() => setDayDraft(null)} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Abbrechen</Text></Pressable>
@@ -687,7 +971,7 @@ export default function StudyScreen() {
 
         {sessionDraft ? (
           <View style={styles.editorCard}>
-            <Text style={styles.cardTitle}>{sessionDraft.sessionId ? 'Lernsession bearbeiten' : 'Freie Lernsession hinzufuegen'}</Text>
+            <Text style={styles.cardTitle}>{sessionDraft.sessionId ? 'Lernsession bearbeiten' : 'Freie Lernsession hinzufügen'}</Text>
             <Text style={styles.label}>Titel</Text>
             <TextInput value={sessionDraft.title} onChangeText={(title) => setSessionDraft({ ...sessionDraft, title })} placeholder="Thema wiederholen" placeholderTextColor={colors.textMuted} style={styles.input} />
             <Text style={styles.label}>Typ</Text>
@@ -769,8 +1053,8 @@ export default function StudyScreen() {
     await reload();
     setMode('home');
     Alert.alert(
-      'Plan uebernommen',
-      `${result.todosAdded} Todos, ${result.habitsAdded} Habit und ${result.calendarAdded} Kalenderbloecke wurden erstellt.`,
+      'Plan übernommen',
+      `${result.todosAdded} Todos, ${result.habitsAdded} Habit und ${result.calendarAdded} Kalenderblöcke wurden erstellt.`,
     );
   }
 
@@ -780,8 +1064,8 @@ export default function StudyScreen() {
   }
 
   function openCreateProject() {
-    if (projects.length >= limits.maxActiveProjects) {
-      showPaywall('active_projects', `Dein aktueller Plan erlaubt ${limits.maxActiveProjects} aktive Lernprojekte.`);
+    if (projects.length >= activeLimits.maxActiveProjects) {
+      showPaywall('active_projects', `Dein aktueller Plan erlaubt ${activeLimits.maxActiveProjects} aktive Lernprojekte.`);
       return;
     }
     resetCreateForm();
@@ -790,12 +1074,12 @@ export default function StudyScreen() {
 
   function confirmRemoveProject(project: StudyProject) {
     Alert.alert(
-      'Lernprojekt loeschen?',
-      'Dadurch werden der Lernplan, alle Sessions, Wiederholungen, Fortschrittsschritte und zugehoerige Todos/Kalenderbloecke geloescht. Hochgeladene Originaldateien werden nicht gespeichert und sind davon nicht betroffen.',
+      'Lernprojekt löschen?',
+      'Dadurch werden der Lernplan, alle Sessions, Wiederholungen, Fortschrittsschritte und zugehörige Todos/Kalenderblöcke gelöscht. Hochgeladene Originaldateien werden nicht gespeichert und sind davon nicht betroffen.',
       [
         { text: 'Abbrechen', style: 'cancel' },
         {
-          text: 'Endgueltig loeschen',
+          text: 'Endgültig löschen',
           style: 'destructive',
           onPress: () => {
             void deleteStudyProject(project.id).then(async () => {
@@ -811,11 +1095,11 @@ export default function StudyScreen() {
 
   async function exportSelected(format: 'pdf' | 'docx') {
     if (!selectedProject || !selectedPlan) return;
-    if (format === 'pdf' && !limits.allowPdfExport) {
+    if (format === 'pdf' && !activeLimits.allowPdfExport) {
       showPaywall('pdf_export');
       return;
     }
-    if (format === 'docx' && !limits.allowDocxExport) {
+    if (format === 'docx' && !activeLimits.allowDocxExport) {
       showPaywall('docx_export');
       return;
     }
@@ -828,11 +1112,11 @@ export default function StudyScreen() {
 
   async function exportPreview(format: 'pdf' | 'docx') {
     if (!preview) return;
-    if (format === 'pdf' && !limits.allowPdfExport) {
+    if (format === 'pdf' && !activeLimits.allowPdfExport) {
       showPaywall('pdf_export');
       return;
     }
-    if (format === 'docx' && !limits.allowDocxExport) {
+    if (format === 'docx' && !activeLimits.allowDocxExport) {
       showPaywall('docx_export');
       return;
     }
@@ -853,26 +1137,57 @@ export default function StudyScreen() {
     await reload();
   }
 
+  if (isAnalyzing) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.loadingScreen}>
+          <Text style={styles.title}>Lernplan wird erstellt</Text>
+          <Text style={styles.subtitle}>
+            Kalendulu bereinigt den Stoff, erkennt Lerneinheiten und verteilt deinen Plan auf realistische Lerntage.
+          </Text>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, analysisProgress))}%` }]} />
+          </View>
+          <Text style={styles.progressText}>{Math.round(analysisProgress)} %</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   if (mode === 'create') {
     return (
       <SafeAreaView style={styles.safe}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Pressable onPress={() => setMode('home')} style={styles.backBtn}>
-            <Text style={styles.backText}>Zurueck</Text>
+            <Text style={styles.backText}>Zurück</Text>
           </Pressable>
 
           <Text style={styles.title}>Neues Lernprojekt</Text>
           <Text style={styles.notice}>
             Bitte lade keine personenbezogenen Patientendaten oder vertraulichen Inhalte hoch. Hochgeladene Fotos
-            und Dateien werden nur temporaer verarbeitet und anschliessend geloescht. Dauerhaft gespeichert werden
+            und Dateien werden nur temporär verarbeitet und anschließend gelöscht. Dauerhaft gespeichert werden
             nur der daraus erzeugte Lernplan, Lerneinheiten, Termine und Wiederholungen.
           </Text>
 
           <View style={styles.card}>
             <Text style={styles.label}>Titel</Text>
             <TextInput value={title} onChangeText={setTitle} placeholder="Anatomie Kopf/Hals" placeholderTextColor={colors.textMuted} style={styles.input} />
-            <Text style={styles.label}>Pruefungsdatum optional</Text>
-            <TextInput value={examDate} onChangeText={setExamDate} placeholder="YYYY-MM-DD" placeholderTextColor={colors.textMuted} style={styles.input} />
+            <Text style={styles.label}>Prüfungsdatum optional</Text>
+            <Pressable onPress={() => setShowExamPicker(true)} style={styles.dateInput}>
+              <Text style={[styles.dateInputText, !examDate && styles.placeholderText]}>
+                {examDate ? dayjs(examDate).format('DD.MM.YYYY') : 'Datum auswählen'}
+              </Text>
+            </Pressable>
+            {showExamPicker ? (
+              <DateTimePicker
+                value={examDate ? new Date(`${examDate}T12:00:00`) : new Date()}
+                mode="date"
+                display="spinner"
+                locale="de-DE"
+                minimumDate={new Date()}
+                onChange={handleExamDateChange}
+              />
+            ) : null}
             <Text style={styles.label}>Zielniveau</Text>
             <View style={styles.rowWrap}>
               {[
@@ -885,55 +1200,69 @@ export default function StudyScreen() {
                 </Pressable>
               ))}
             </View>
-            <Text style={styles.label}>Lernzeit pro Woche in Minuten</Text>
-            <TextInput value={weeklyMinutes} onChangeText={setWeeklyMinutes} keyboardType="numeric" placeholder="480" placeholderTextColor={colors.textMuted} style={styles.input} />
+            <Text style={styles.label}>Lernzeit pro Woche in Stunden</Text>
+            <TextInput value={weeklyHours} onChangeText={setWeeklyHours} keyboardType="numeric" placeholder="8" placeholderTextColor={colors.textMuted} style={styles.input} />
             <Text style={styles.notice}>
-              Bevor dein Plan erstellt wird, pruefen wir, ob deine verfuegbare Lernzeit fuer den gesamten Stoff realistisch ausreicht.
+              Bevor dein Plan erstellt wird, prüfen wir, ob deine verfügbare Lernzeit für den gesamten Stoff realistisch ausreicht.
             </Text>
-            <Text style={styles.label}>Verfuegbare Tage pro Woche</Text>
+            <Text style={styles.label}>Verfügbare Tage pro Woche</Text>
             <TextInput value={availableDaysPerWeek} onChangeText={setAvailableDaysPerWeek} keyboardType="numeric" placeholder="5" placeholderTextColor={colors.textMuted} style={styles.input} />
             <Text style={styles.label}>Minuten pro Lerntag</Text>
             <TextInput value={minutesPerDay} onChangeText={setMinutesPerDay} keyboardType="numeric" placeholder="90" placeholderTextColor={colors.textMuted} style={styles.input} />
-            <Text style={styles.label}>Maximale Sessionlaenge</Text>
-            <TextInput value={maxSessionMinutes} onChangeText={setMaxSessionMinutes} keyboardType="numeric" placeholder="60" placeholderTextColor={colors.textMuted} style={styles.input} />
-            <Text style={styles.label}>Bevorzugte Lernzeit</Text>
-            <View style={styles.rowWrap}>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Lernmaterial auswählen</Text>
+            <View style={styles.inputModeGrid}>
               {[
-                ['morning', 'morgens'],
-                ['midday', 'mittags'],
-                ['evening', 'abends'],
-                ['flexible', 'flexibel'],
+                ['topics', 'Themenliste'],
+                ['text', 'Text'],
+                ['files', 'Datei'],
               ].map(([id, label]) => (
-                <Pressable key={id} onPress={() => setPreferredTime(id as typeof preferredTime)} style={[styles.chip, preferredTime === id && styles.chipActive]}>
-                  <Text style={[styles.chipText, preferredTime === id && styles.chipTextActive]}>{label}</Text>
+                <Pressable
+                  key={id}
+                  onPress={() => setMaterialInputMode(id as MaterialInputMode)}
+                  style={[styles.inputModeCard, materialInputMode === id && styles.inputModeCardActive]}
+                >
+                  <Text style={[styles.inputModeText, materialInputMode === id && styles.inputModeTextActive]}>{label}</Text>
                 </Pressable>
               ))}
             </View>
-          </View>
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Themenliste</Text>
-            <TextInput
-              value={manualTopicsText}
-              onChangeText={setManualTopicsText}
-              placeholder={'Schaedelbasis\nHirnnerven\nN. trigeminus\nOrbita'}
-              placeholderTextColor={colors.textMuted}
-              style={[styles.input, styles.textarea]}
-              multiline
-            />
-            <Text style={styles.cardTitle}>Text einfuegen</Text>
-            <TextInput value={pastedText} onChangeText={setPastedText} placeholder="Optional Text einfuegen" placeholderTextColor={colors.textMuted} style={[styles.input, styles.textarea]} multiline />
-          </View>
+            {materialInputMode === 'topics' ? (
+              <>
+                <Text style={styles.label}>Themenliste</Text>
+                <TextInput
+                  value={manualTopicsText}
+                  onChangeText={setManualTopicsText}
+                  placeholder={'Schädelbasis\nHirnnerven\nN. trigeminus\nOrbita'}
+                  placeholderTextColor={colors.textMuted}
+                  style={[styles.input, styles.textarea]}
+                  multiline
+                />
+              </>
+            ) : null}
 
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>PDF, DOCX, TXT und MD</Text>
+            {materialInputMode === 'text' ? (
+              <>
+                <Text style={styles.label}>Text einfügen</Text>
+                <TextInput
+                  value={pastedText}
+                  onChangeText={setPastedText}
+                  placeholder="Optional Lerntext oder Notizen einfügen"
+                  placeholderTextColor={colors.textMuted}
+                  style={[styles.input, styles.textarea]}
+                  multiline
+                />
+              </>
+            ) : null}
+
+            {materialInputMode === 'files' ? (
+              <>
+                <Text style={styles.cardTitle}>PDF, DOCX, PPTX, TXT und MD</Text>
             <Text style={styles.notice}>
-              PDFs und DOCX-Dateien werden nur temporaer zur Textextraktion verarbeitet und anschliessend geloescht. Dauerhaft gespeichert werden nur Lerneinheiten, Lernplan, Termine und Wiederholungen.
+              PDFs, DOCX- und PPTX-Dateien werden nur temporär zur Textextraktion verarbeitet und anschließend gelöscht. Dauerhaft gespeichert werden nur Lerneinheiten, Lernplan, Termine und Wiederholungen.
             </Text>
-            <View style={styles.actionRow}>
-              <Pressable onPress={showInactiveMediaMessage} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Fotos/OCR noch aus</Text></Pressable>
-              <Pressable onPress={() => Alert.alert('Dein Plan', `${limits.label}: bis ${limits.maxPagesPerFile} Seiten pro Datei, ${limits.maxPagesPerMonth} Seiten pro Monat.`)} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Limits anzeigen</Text></Pressable>
-            </View>
             <Pressable onPress={addFile} style={styles.secondaryWide}><Text style={styles.secondaryText}>Datei hochladen</Text></Pressable>
             {files.map((asset) => (
               <View key={asset.id} style={styles.assetRow}>
@@ -944,6 +1273,11 @@ export default function StudyScreen() {
             {uploadMessages.slice(-3).map((message, index) => (
               <Text key={`${message}-${index}`} style={styles.warningText}>{message}</Text>
             ))}
+            {extractedMaterialText ? (
+              <Text style={styles.successText}>Dateitext wurde bereinigt und intern zur Analyse hinzugefügt. Er wird nicht im Textfeld angezeigt.</Text>
+            ) : null}
+              </>
+            ) : null}
           </View>
 
           <Pressable onPress={analyze} style={styles.primaryBtn}>
@@ -956,24 +1290,15 @@ export default function StudyScreen() {
 
   if (mode === 'preview' && preview) {
     const tone = feasibilityTone(preview.plan);
-    const sessionDays = groupSessionsByDay(preview.plan.sessions);
-
     return (
       <SafeAreaView style={styles.safe}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Pressable onPress={() => setMode('create')} style={styles.backBtn}><Text style={styles.backText}>Bearbeiten</Text></Pressable>
           <Text style={styles.title}>Analyse-Vorschau</Text>
 
-          <View style={styles.statsGrid}>
-            <View style={styles.stat}><Text style={styles.statValue}>{preview.units.length}</Text><Text style={styles.statLabel}>Einheiten</Text></View>
-            <View style={styles.stat}><Text style={styles.statValue}>{minutesLabel(preview.plan.learningMinutes)}</Text><Text style={styles.statLabel}>Lernzeit</Text></View>
-            <View style={styles.stat}><Text style={styles.statValue}>{minutesLabel(preview.plan.reviewMinutes)}</Text><Text style={styles.statLabel}>Wiederholungen</Text></View>
-            <View style={styles.stat}><Text style={styles.statValue}>{preview.plan.feasible ? 'OK' : 'Eng'}</Text><Text style={styles.statLabel}>Machbarkeit</Text></View>
-          </View>
-
-          <View style={[styles.statusBox, tone === 'warning' && styles.statusBoxWarning, tone === 'danger' && styles.statusBoxDanger]}>
-            <Text style={[styles.statusTitle, tone === 'warning' && styles.statusTitleWarning, tone === 'danger' && styles.statusTitleDanger]}>
-              {feasibilityTitle(preview.plan)}
+          <View style={[styles.bigFeasibilityCard, tone === 'warning' && styles.bigFeasibilityWarning, tone === 'danger' && styles.bigFeasibilityDanger]}>
+            <Text style={[styles.bigFeasibilityText, tone === 'warning' && styles.statusTitleWarning, tone === 'danger' && styles.statusTitleDanger]}>
+              {preview.plan.feasible ? 'Realistisch' : 'Nicht realistisch'}
             </Text>
             <Text style={styles.metaText}>{preview.plan.recommendation}</Text>
           </View>
@@ -985,71 +1310,24 @@ export default function StudyScreen() {
           ))}
 
           <View style={styles.actionRow}>
-            <Pressable onPress={() => void applyPreview()} style={styles.primaryHalf}><Text style={styles.primaryText}>Plan uebernehmen</Text></Pressable>
-            <Pressable onPress={() => void exportPreview('pdf')} style={styles.secondaryBtn}><Text style={styles.secondaryText}>PDF herunterladen</Text></Pressable>
+            <Pressable onPress={() => void applyPreview()} style={styles.primaryHalf}><Text style={styles.primaryText}>Plan übernehmen</Text></Pressable>
+            <Pressable onPress={() => void exportPreview('pdf')} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Lernplan als PDF</Text></Pressable>
           </View>
-          <Pressable onPress={() => void exportPreview('docx')} style={styles.secondaryWide}><Text style={styles.secondaryText}>DOCX herunterladen</Text></Pressable>
+          <Pressable onPress={() => void exportPreview('docx')} style={styles.secondaryWide}><Text style={styles.secondaryText}>Lernplan als DOCX</Text></Pressable>
 
           {renderStudyEditors()}
 
-          <Text style={styles.sectionTitle}>Dein Stoff im Ueberblick</Text>
-          {preview.units.map((unit) => (
-            <Pressable key={unit.id} onPress={() => rebuildPreviewWithUnits(toggleKnowledgeUnit(preview.units, unit.id))} style={[styles.unitCard, !unit.enabled && styles.unitDisabled]}>
-              <View style={styles.unitHeader}>
-                <Text style={styles.unitTitle}>{unit.title}</Text>
-                <Text style={styles.unitBadge}>{coverageLabel(unit.coverageStatus)}</Text>
-              </View>
-              <Text style={styles.metaText}>
-                Schwierigkeit {unit.difficulty}/5 - Wichtigkeit {unit.importance}/5 - {minutesLabel(unit.estimatedMinutes)}
-                {sourcePagesLabel(unit) ? ` - ${sourcePagesLabel(unit)}` : ''}
-              </Text>
-              {unit.summary ? <Text style={styles.metaText}>{unit.summary}</Text> : null}
-            </Pressable>
-          ))}
-
-          <Text style={styles.sectionTitle}>Tagesplan</Text>
-          {sessionDays.map((day) => (
-            <View key={day.date} style={styles.dayGroup}>
-              <View style={styles.dayHeader}>
-                <View style={styles.dayHeaderText}>
-                  <Text style={styles.dayTitle}>{day.label}</Text>
-                  <Text style={styles.metaText}>{dayLearningSummary(day.sessions)}</Text>
-                </View>
-                <Pressable onPress={() => openDayEditor('preview', preview.project.id, day.date, day.sessions)} style={styles.miniBtn}><Text style={styles.miniBtnText}>Bearbeiten</Text></Pressable>
-              </View>
-              <View style={styles.actionRow}>
-                <Pressable onPress={() => openSessionEditor('preview', preview.project.id, undefined, day.date)} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Session hinzufuegen</Text></Pressable>
-                <Pressable onPress={() => confirmDeleteDay('preview', preview.project.id, day.date)} style={styles.dangerMiniBtn}><Text style={styles.dangerText}>Lerntag loeschen</Text></Pressable>
-              </View>
-              {day.sessions.map((session) => (
-                <View
-                  key={session.id}
-                  style={[
-                    styles.sessionRow,
-                    session.sessionType === 'review' && styles.sessionReview,
-                    session.sessionType === 'quiz' && styles.sessionQuiz,
-                  ]}
-                >
-                  <View style={styles.sessionHeader}>
-                    <Text style={styles.sessionBadge}>{sessionTypeLabel(session.sessionType)}</Text>
-                    <Text style={styles.sessionTime}>{sessionTimeLabel(session)}</Text>
-                  </View>
-                  <Text style={styles.sessionTitle}>{session.title}</Text>
-                  <Text style={styles.metaText}>{minutesLabel(session.estimatedMinutes)}</Text>
-                  {session.todoTitles[0] ? <Text style={styles.metaText}>{session.todoTitles[0]}</Text> : null}
-                  <View style={styles.sessionActions}>
-                    <Pressable onPress={() => openSessionEditor('preview', preview.project.id, session)}><Text style={styles.linkText}>Bearbeiten</Text></Pressable>
-                    <Pressable onPress={() => void completeSession('preview', session)}><Text style={styles.linkText}>Erledigt</Text></Pressable>
-                    <Pressable onPress={() => confirmDeleteSession('preview', session)}><Text style={styles.removeText}>Loeschen</Text></Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
-          ))}
+          <Text style={styles.sectionTitle}>Tagesübersicht</Text>
+          {renderStudyDayCards({
+            scope: 'preview',
+            projectId: preview.project.id,
+            plan: preview.plan,
+            availableUnits: preview.units,
+          })}
 
           <View style={styles.actionRow}>
             <Pressable onPress={savePreview} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Nur speichern</Text></Pressable>
-            <Pressable onPress={applyPreview} style={styles.primaryHalf}><Text style={styles.primaryText}>Plan uebernehmen</Text></Pressable>
+            <Pressable onPress={applyPreview} style={styles.primaryHalf}><Text style={styles.primaryText}>Plan übernehmen</Text></Pressable>
           </View>
         </ScrollView>
       </SafeAreaView>
@@ -1057,11 +1335,11 @@ export default function StudyScreen() {
   }
 
   if (mode === 'detail' && selectedProject && selectedPlan) {
-    const selectedSessionDays = groupSessionsByDay(selectedPlan.sessions.filter((session) => !session.completed));
+    const openSelectedPlan = { ...selectedPlan, sessions: selectedPlan.sessions.filter((session) => !session.completed) };
 
     return (
       <SafeAreaView style={styles.safe}>
-        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           <Pressable onPress={() => setMode('home')} style={styles.backBtn}><Text style={styles.backText}>Lernen</Text></Pressable>
           <Text style={styles.title}>{selectedProject.title}</Text>
           <Text style={styles.subtitle}>{selectedPlan.feasible ? 'Plan ist realistisch' : selectedPlan.recommendation}</Text>
@@ -1078,37 +1356,12 @@ export default function StudyScreen() {
             </Pressable>
           )) : <Text style={styles.emptyText}>Noch keine Fortschrittsschritte.</Text>}
           <Text style={styles.sectionTitle}>Lerntage</Text>
-          {selectedSessionDays.length ? selectedSessionDays.map((day) => (
-            <View key={day.date} style={styles.dayGroup}>
-              <View style={styles.dayHeader}>
-                <View style={styles.dayHeaderText}>
-                  <Text style={styles.dayTitle}>{day.label}</Text>
-                  <Text style={styles.metaText}>{dayLearningSummary(day.sessions)}</Text>
-                </View>
-                <Pressable onPress={() => openDayEditor('detail', selectedProject.id, day.date, day.sessions)} style={styles.miniBtn}><Text style={styles.miniBtnText}>Bearbeiten</Text></Pressable>
-              </View>
-              <View style={styles.actionRow}>
-                <Pressable onPress={() => openSessionEditor('detail', selectedProject.id, undefined, day.date)} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Session hinzufuegen</Text></Pressable>
-                <Pressable onPress={() => confirmDeleteDay('detail', selectedProject.id, day.date)} style={styles.dangerMiniBtn}><Text style={styles.dangerText}>Lerntag loeschen</Text></Pressable>
-              </View>
-              {day.sessions.map((session) => (
-                <View key={session.id} style={[styles.sessionRow, session.sessionType === 'review' && styles.sessionReview, session.sessionType === 'quiz' && styles.sessionQuiz]}>
-                  <View style={styles.sessionHeader}>
-                    <Text style={styles.sessionBadge}>{sessionTypeLabel(session.sessionType)}</Text>
-                    <Text style={styles.sessionTime}>{sessionTimeLabel(session)}</Text>
-                  </View>
-                  <Text style={styles.sessionTitle}>{session.title}</Text>
-                  <Text style={styles.metaText}>{minutesLabel(session.estimatedMinutes)}</Text>
-                  {session.note ? <Text style={styles.metaText}>{session.note}</Text> : null}
-                  <View style={styles.sessionActions}>
-                    <Pressable onPress={() => openSessionEditor('detail', selectedProject.id, session)}><Text style={styles.linkText}>Bearbeiten</Text></Pressable>
-                    <Pressable onPress={() => void completeSession('detail', session)}><Text style={styles.linkText}>Erledigt</Text></Pressable>
-                    <Pressable onPress={() => confirmDeleteSession('detail', session)}><Text style={styles.removeText}>Loeschen</Text></Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )) : <Text style={styles.emptyText}>Keine offenen Lerntage.</Text>}
+          {renderStudyDayCards({
+            scope: 'detail',
+            projectId: selectedProject.id,
+            plan: openSelectedPlan,
+            availableUnits: selectedUnits,
+          })}
           <Text style={styles.sectionTitle}>Lerneinheiten</Text>
           {selectedUnits.map((unit) => (
             <View key={unit.id} style={styles.unitCard}>
@@ -1119,7 +1372,7 @@ export default function StudyScreen() {
               <Text style={styles.metaText}>Schwierigkeit {unit.difficulty}/5 - Wichtigkeit {unit.importance}/5 - {minutesLabel(unit.estimatedMinutes)}</Text>
             </View>
           ))}
-          <Pressable onPress={() => confirmRemoveProject(selectedProject)} style={styles.dangerBtn}><Text style={styles.dangerText}>Lernprojekt loeschen</Text></Pressable>
+          <Pressable onPress={() => confirmRemoveProject(selectedProject)} style={styles.dangerBtn}><Text style={styles.dangerText}>Lernprojekt löschen</Text></Pressable>
         </ScrollView>
       </SafeAreaView>
     );
@@ -1127,7 +1380,7 @@ export default function StudyScreen() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <Text style={styles.title}>Lernen</Text>
           <Pressable onPress={openCreateProject} style={styles.newBtn}>
@@ -1138,7 +1391,7 @@ export default function StudyScreen() {
         <View style={styles.statsGrid}>
           <View style={styles.stat}><Text style={styles.statValue}>{projects.length}</Text><Text style={styles.statLabel}>Projekte</Text></View>
           <View style={styles.stat}><Text style={styles.statValue}>{todaySessions.length}</Text><Text style={styles.statLabel}>Heute</Text></View>
-          <View style={styles.stat}><Text style={styles.statValue}>{upcomingReviews.length}</Text><Text style={styles.statLabel}>Wiederholungen</Text></View>
+          <View style={styles.stat}><Text style={styles.statValue}>{totalOpenStudyDays}</Text><Text style={styles.statLabel}>Lerntage</Text></View>
         </View>
 
         <Text style={styles.sectionTitle}>Aktive Lernprojekte</Text>
@@ -1147,22 +1400,14 @@ export default function StudyScreen() {
           return (
             <Pressable key={project.id} onPress={() => openProject(project.id)} onLongPress={() => confirmRemoveProject(project)} style={styles.projectCard}>
               <Text style={styles.projectTitle}>{project.title}</Text>
-              <Text style={styles.metaText}>{project.examDate ? `Pruefung: ${project.examDate}` : 'Ohne Pruefungsdatum'} - {targetLevelLabel(project.targetLevel)}</Text>
+              <Text style={styles.metaText}>{project.examDate ? `Prüfung: ${project.examDate}` : 'Ohne Prüfungsdatum'} - {targetLevelLabel(project.targetLevel)}</Text>
               {plan ? <Text style={plan.feasible ? styles.successText : styles.warningText}>{plan.recommendation}</Text> : null}
               <Pressable onPress={() => confirmRemoveProject(project)} style={styles.inlineDanger}>
-                <Text style={styles.removeText}>Lernprojekt loeschen</Text>
+                <Text style={styles.removeText}>Lernprojekt löschen</Text>
               </Pressable>
             </Pressable>
           );
         }) : <Text style={styles.emptyText}>Noch kein Lernprojekt.</Text>}
-
-        <Text style={styles.sectionTitle}>Naechste Wiederholungen</Text>
-        {upcomingReviews.map((item) => (
-          <View key={item.id} style={styles.sessionRow}>
-            <Text style={styles.sessionTitle}>Wiederholen</Text>
-            <Text style={styles.metaText}>{dayjs(item.dueAt).format('DD.MM. HH:mm')} - {minutesLabel(item.estimatedMinutes)}</Text>
-          </View>
-        ))}
       </ScrollView>
     </SafeAreaView>
   );
@@ -1175,6 +1420,10 @@ function makeStyles(
   return StyleSheet.create({
     safe: { flex: 1, backgroundColor: colors.background },
     content: { padding: 18, paddingBottom: 120, gap: 14 },
+    loadingScreen: { flex: 1, padding: 24, justifyContent: 'center', gap: 18 },
+    progressTrack: { height: 12, borderRadius: 999, overflow: 'hidden', backgroundColor: colors.cardSecondary, borderWidth: 1, borderColor: colors.border },
+    progressFill: { height: '100%', borderRadius: 999, backgroundColor: colors.primary },
+    progressText: { color: colors.text, fontSize: 18, fontWeight: '900', fontFamily: fontFamily.bold, textAlign: 'center' },
     header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
     title: { color: colors.text, fontSize: 32, fontWeight: '900', fontFamily: fontFamily.bold },
     subtitle: { color: colors.textMuted, fontSize: 14, lineHeight: 20, fontFamily: fontFamily.regular },
@@ -1184,9 +1433,17 @@ function makeStyles(
     editorCard: { backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.primary, padding: 14, gap: 2 },
     label: { color: colors.textMuted, fontSize: 13, fontWeight: '700', marginBottom: 7, fontFamily: fontFamily.bold },
     input: { backgroundColor: colors.cardSecondary, borderRadius: 14, borderWidth: 1, borderColor: colors.border, color: colors.text, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12, fontSize: 15, fontFamily: fontFamily.regular },
+    dateInput: { backgroundColor: colors.cardSecondary, borderRadius: 14, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, paddingVertical: 14, marginBottom: 12 },
+    dateInputText: { color: colors.text, fontSize: 15, fontFamily: fontFamily.bold },
+    placeholderText: { color: colors.textMuted, fontFamily: fontFamily.regular },
     textarea: { minHeight: 120, textAlignVertical: 'top' },
     smallTextarea: { minHeight: 72, textAlignVertical: 'top' },
     rowWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+    inputModeGrid: { flexDirection: 'row', gap: 10, marginBottom: 14 },
+    inputModeCard: { flex: 1, minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.cardSecondary, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 },
+    inputModeCardActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    inputModeText: { color: colors.text, fontWeight: '900', fontFamily: fontFamily.bold },
+    inputModeTextActive: { color: colors.primaryText },
     actionRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
     chip: { borderRadius: 999, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 12, paddingVertical: 9, backgroundColor: colors.cardSecondary },
     chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -1208,6 +1465,10 @@ function makeStyles(
     stat: { flexGrow: 1, flexBasis: '47%', backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 12 },
     statValue: { color: colors.text, fontSize: 18, fontWeight: '900', fontFamily: fontFamily.bold },
     statLabel: { color: colors.textMuted, marginTop: 4, fontSize: 12, fontFamily: fontFamily.regular },
+    bigFeasibilityCard: { backgroundColor: colors.card, borderRadius: 22, borderWidth: 1, borderColor: colors.success, padding: 18, gap: 6 },
+    bigFeasibilityWarning: { borderColor: colors.warning },
+    bigFeasibilityDanger: { borderColor: colors.danger },
+    bigFeasibilityText: { color: colors.success, fontSize: 28, fontWeight: '900', fontFamily: fontFamily.bold },
     statusBox: { backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.success, padding: 14 },
     statusBoxWarning: { borderColor: colors.warning },
     statusBoxDanger: { borderColor: colors.danger },
@@ -1222,6 +1483,19 @@ function makeStyles(
     unitHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 6 },
     unitTitle: { flex: 1, color: colors.text, fontWeight: '900', fontSize: 15, fontFamily: fontFamily.bold },
     unitBadge: { color: colors.primary, backgroundColor: colors.cardSecondary, borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900', fontFamily: fontFamily.bold },
+    studyDayCard: { borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, padding: 16, marginBottom: 8 },
+    studyDayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+    studyDayTitle: { color: colors.text, fontSize: 18, fontWeight: '900', fontFamily: fontFamily.bold, textTransform: 'capitalize' },
+    studyDayChevron: { color: colors.primary, fontSize: 28, fontWeight: '900', fontFamily: fontFamily.bold },
+    studyDayDetails: { marginTop: 14, gap: 12 },
+    dayManagementRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+    learnBlock: { borderRadius: 16, padding: 12, backgroundColor: 'rgba(234, 179, 8, 0.12)', gap: 8 },
+    reviewBlock: { borderRadius: 16, padding: 12, backgroundColor: 'rgba(20, 184, 166, 0.12)', gap: 8 },
+    dayBlockTitle: { color: colors.text, fontSize: 15, fontWeight: '900', fontFamily: fontFamily.bold, marginBottom: 2 },
+    daySessionCard: { borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, padding: 12 },
+    hintText: { color: colors.textMuted, lineHeight: 19, marginTop: 4, fontFamily: fontFamily.regular },
+    emptyDayText: { color: colors.textMuted, fontFamily: fontFamily.regular },
+    dangerPillBtn: { minHeight: 34, borderRadius: 999, borderWidth: 1, borderColor: colors.danger, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
     dayGroup: { gap: 8 },
     dayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
     dayHeaderText: { flex: 1 },

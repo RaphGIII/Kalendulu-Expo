@@ -7,7 +7,8 @@ import {
 import { callOpenAiJsonText } from './openai/chatJson';
 import { selectOpenAiModel } from './openai/modelSelection';
 import { unzipSync, strFromU8 } from 'fflate';
-
+import { handleStudyPageExtractionRoute } from './studyPageExtractionRoutes';
+import { parseJsonFromModelResponse } from './jsonParsing';
 export interface Env {
   OPENAI_API_KEY: string;
   SUPABASE_URL: string;
@@ -17,6 +18,10 @@ export interface Env {
   OPENAI_MODEL_STRONG?: string;
   OPENAI_STUDY_ENHANCEMENT_MODEL?: string;
   OPENAI_STUDY_ENHANCEMENT_MAX_COST_USD?: string;
+  OPENAI_STUDY_PAGE_MODEL?: string;
+  OPENAI_STUDY_PAGE_MAX_COST_USD?: string;
+  OPENAI_STUDY_PAGE_INPUT_USD_PER_1M?: string;
+  OPENAI_STUDY_PAGE_OUTPUT_USD_PER_1M?: string;
 }
 
 type GoalQuestion = {
@@ -236,17 +241,7 @@ function extractFirstJsonObject(text: string): string | null {
 }
 
 function parseModelJsonLoose<T>(rawText: string): T | null {
-  try {
-    return JSON.parse(stripCodeFences(rawText)) as T;
-  } catch {
-    const extracted = extractFirstJsonObject(rawText);
-    if (!extracted) return null;
-    try {
-      return JSON.parse(extracted) as T;
-    } catch {
-      return null;
-    }
-  }
+  return parseJsonFromModelResponse<T>(rawText);
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -1446,7 +1441,16 @@ export default {
       }
 
       const isStudyExtractionRoute = url.pathname.startsWith('/study/extractions');
-      if (request.method !== 'POST' && !(isStudyExtractionRoute && (request.method === 'GET' || request.method === 'DELETE'))) {
+      const isStudyPageExtractionRoute = url.pathname === '/study/page-learning-extraction';
+
+      if (
+        request.method !== 'POST' &&
+        !(isStudyExtractionRoute && (request.method === 'GET' || request.method === 'DELETE'))
+      ) {
+        return errorResponse('Method not allowed', 405);
+      }
+
+      if (isStudyPageExtractionRoute && request.method !== 'POST') {
         return errorResponse('Method not allowed', 405);
       }
 
@@ -1464,6 +1468,10 @@ export default {
             }
           })(),
         });
+      }
+
+      if (isStudyPageExtractionRoute) {
+        return handleStudyPageExtractionRoute(request, env);
       }
 
       if (isStudyExtractionRoute) {

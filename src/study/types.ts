@@ -23,6 +23,7 @@ export type KnowledgeUnit = {
   projectId: string;
   title: string;
   summary?: string;
+  bulletPoints?: string[];
   keywords: string[];
   estimatedMinutes: number;
   difficulty: 1 | 2 | 3 | 4 | 5;
@@ -119,6 +120,7 @@ export type TemporaryStudyAsset = {
 export type StudyInputBundle = {
   manualTopics: string[];
   pastedText?: string;
+  pageLearningSections?: DetectedStudySection[];
   uploadedImages: TemporaryStudyAsset[];
   uploadedFiles: TemporaryStudyAsset[];
 };
