@@ -1,5 +1,5 @@
-import PsycheScreen from '@/src/psyche/PsycheScreen';
+import StudyScreen from '@/src/study/StudyScreen';
 
 export default function PsycheTab() {
-  return <PsycheScreen />;
+  return <StudyScreen />;
 }

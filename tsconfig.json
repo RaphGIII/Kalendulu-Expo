@@ -6,15 +6,14 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"]
     }
   },
   "exclude": [
     "node_modules",
     "src/**/*.old.ts",
-    "planner-worker/.wrangler/**"
+    "planner-worker/.wrangler/**",
+    "supabase/functions/**"
   ],
   "include": [
     "**/*.ts",

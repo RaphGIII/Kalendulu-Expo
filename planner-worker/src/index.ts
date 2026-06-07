@@ -6,6 +6,7 @@ import {
 } from './coachEngine';
 import { callOpenAiJsonText } from './openai/chatJson';
 import { selectOpenAiModel } from './openai/modelSelection';
+import { unzipSync, strFromU8 } from 'fflate';
 
 export interface Env {
   OPENAI_API_KEY: string;
@@ -14,6 +15,7 @@ export interface Env {
   OPENAI_MODEL_CHEAP?: string;
   OPENAI_MODEL_BALANCED?: string;
   OPENAI_MODEL_STRONG?: string;
+  OPENAI_STUDY_ENHANCEMENT_MODEL?: string;
 }
 
 type GoalQuestion = {
@@ -1196,6 +1198,212 @@ async function requireAuthenticatedUser(request: Request, env: Env) {
   return user;
 }
 
+type StudyTier = 'free' | 'student' | 'premium';
+type ExtractionJob = {
+  jobId: string;
+  status: 'pending' | 'processing' | 'done' | 'failed';
+  progress: { currentPage: number; totalPages: number; percent: number; stage: string };
+  warnings: string[];
+  result?: {
+    pageCount: number;
+    sections: Array<{
+      title: string;
+      content: string;
+      orderIndex: number;
+      sourcePageStart?: number;
+      sourcePageEnd?: number;
+      sourceSectionTitle?: string;
+    }>;
+    compactText?: string;
+  };
+  error?: string;
+  ownerId: string;
+  createdAt: number;
+};
+
+type ExtractionSection = NonNullable<ExtractionJob['result']>['sections'][number];
+
+const studyExtractionJobs = new Map<string, ExtractionJob>();
+
+const studyTierLimits: Record<StudyTier, { maxPagesPerFile: number; maxFileSizeMb: number }> = {
+  free: { maxPagesPerFile: 10, maxFileSizeMb: 10 },
+  student: { maxPagesPerFile: 100, maxFileSizeMb: 30 },
+  premium: { maxPagesPerFile: 300, maxFileSizeMb: 100 },
+};
+
+function stripXml(value: string) {
+  return value
+    .replace(/<w:p[^>]*>/g, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function cleanExtractedText(text: string) {
+  return text
+    .replace(/\r/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !/^\d+$/.test(line) && !/^seite\s+\d+/i.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function sectionsFromText(text: string, pageCount: number) {
+  const lines = cleanExtractedText(text).split('\n').filter(Boolean);
+  const sections: ExtractionSection[] = [];
+  let currentTitle = '';
+  let current: string[] = [];
+
+  const push = () => {
+    if (!currentTitle && !current.length) return;
+    const title = currentTitle || current[0]?.slice(0, 80) || `Abschnitt ${sections.length + 1}`;
+    const content = current.join('\n') || title;
+    sections.push({
+      title,
+      content: content.length > 900 ? content.slice(0, 900) : content,
+      orderIndex: sections.length,
+      sourcePageStart: pageCount ? Math.min(pageCount, sections.length + 1) : undefined,
+      sourcePageEnd: pageCount ? Math.min(pageCount, sections.length + 1) : undefined,
+      sourceSectionTitle: title,
+    });
+    currentTitle = '';
+    current = [];
+  };
+
+  for (const line of lines) {
+    const heading = line.length <= 90 && /^[A-ZÄÖÜ0-9][^.!?]{2,}$/.test(line);
+    if (heading) {
+      push();
+      currentTitle = line;
+    } else {
+      current.push(line);
+      if (current.join(' ').length > 900) push();
+    }
+  }
+  push();
+  return sections.length ? sections : [{ title: 'Lernstoff', content: cleanExtractedText(text).slice(0, 900), orderIndex: 0 }];
+}
+
+function extractDocxText(bytes: Uint8Array) {
+  const unzipped = unzipSync(bytes);
+  const document = unzipped['word/document.xml'];
+  if (!document) throw new Error('DOCX enthaelt kein word/document.xml.');
+  return cleanExtractedText(stripXml(strFromU8(document)));
+}
+
+function estimatePdfPageCount(raw: string) {
+  const matches = raw.match(/\/Type\s*\/Page\b/g);
+  return Math.max(1, matches?.length ?? 1);
+}
+
+function extractPdfText(raw: string) {
+  const textMatches = [...raw.matchAll(/\(([^()]{2,500})\)\s*Tj/g)].map((match) => match[1]);
+  const arrayMatches = [...raw.matchAll(/\[((?:\([^()]{1,300}\)\s*)+)\]\s*TJ/g)]
+    .map((match) => [...match[1].matchAll(/\(([^()]{1,300})\)/g)].map((inner) => inner[1]).join(''));
+  return cleanExtractedText([...textMatches, ...arrayMatches].join('\n'));
+}
+
+async function runStudyExtraction(request: Request, userId: string) {
+  const form = await request.formData() as any;
+  const file = form.get('file');
+  const tier = safeString(form.get('tier')).trim() as StudyTier || 'free';
+  const fileName = safeString(form.get('fileName')).trim().toLowerCase();
+  const fileSize = safeNumber(form.get('fileSize'), 0);
+  const limits = studyTierLimits[tier] ?? studyTierLimits.free;
+
+  if (!(file instanceof File)) {
+    return errorResponse('File is required.', 400);
+  }
+
+  if (!/\.(pdf|docx|txt|md)$/i.test(fileName || file.name)) {
+    return errorResponse('Unsupported study file type.', 400);
+  }
+
+  if (fileSize > limits.maxFileSizeMb * 1024 * 1024) {
+    return errorResponse('File exceeds current tier size limit.', 402, { paywallReason: 'file_size' });
+  }
+
+  const jobId = `study_job_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const warnings: string[] = [];
+  let text = '';
+  let pageCount = 1;
+
+  try {
+    if (fileName.endsWith('.txt') || fileName.endsWith('.md')) {
+      text = cleanExtractedText(new TextDecoder().decode(bytes));
+    } else if (fileName.endsWith('.docx')) {
+      text = extractDocxText(bytes);
+      pageCount = Math.max(1, Math.ceil(text.length / 2600));
+    } else if (fileName.endsWith('.pdf')) {
+      const raw = new TextDecoder('latin1').decode(bytes);
+      pageCount = estimatePdfPageCount(raw);
+      text = extractPdfText(raw);
+      if (text.length / pageCount < 40) {
+        throw new Error('Diese PDF scheint gescannt zu sein und enthaelt keinen auswaehlbaren Text. OCR ist noch nicht aktiviert.');
+      }
+    }
+
+    if (pageCount > limits.maxPagesPerFile) {
+      return errorResponse('File exceeds current tier page limit.', 402, { paywallReason: 'large_document', pageCount });
+    }
+
+    if (!text.trim()) {
+      throw new Error('Das Dokument enthaelt keinen verwertbaren Text.');
+    }
+
+    const sections = sectionsFromText(text, pageCount);
+    const compactText = sections.map((section: ExtractionSection) => `${section.title}\n${section.content}`).join('\n\n');
+    const job: ExtractionJob = {
+      jobId,
+      ownerId: userId,
+      status: 'done',
+      progress: { currentPage: pageCount, totalPages: pageCount, percent: 100, stage: 'done' },
+      warnings,
+      result: { pageCount, sections, compactText },
+      createdAt: Date.now(),
+    };
+    studyExtractionJobs.set(jobId, job);
+    return jsonResponse(job);
+  } catch (error: any) {
+    const job: ExtractionJob = {
+      jobId,
+      ownerId: userId,
+      status: 'failed',
+      progress: { currentPage: 0, totalPages: pageCount, percent: 0, stage: 'failed' },
+      warnings,
+      error: error?.message ?? 'Study extraction failed.',
+      createdAt: Date.now(),
+    };
+    studyExtractionJobs.set(jobId, job);
+    return jsonResponse(job, 422);
+  }
+}
+
+async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env) {
+  const raw = await callPlannerModelRaw({
+    env,
+    model: env.OPENAI_STUDY_ENHANCEMENT_MODEL || env.OPENAI_MODEL_CHEAP || 'gpt-5-nano',
+    system: [
+      'Du bist Kalendulu Study Enhancer.',
+      'Antworte nur mit JSON.',
+      'Nutze nur die kompakten KnowledgeUnit-Daten und Plan-Metadaten.',
+      'Keine neuen Themen erfinden, keine Themen entfernen, keinen Scheduler ersetzen.',
+      'Verbessere nur Titel, kurze summaries, Aufgabenformulierungen und Review-Hinweise.',
+    ].join('\n'),
+    user: JSON.stringify(body),
+    maxCompletionTokens: 2200,
+  });
+  return parseModelJsonLoose<unknown>(raw) ?? body;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') {
@@ -1215,7 +1423,8 @@ export default {
         });
       }
 
-      if (request.method !== 'POST') {
+      const isStudyExtractionRoute = url.pathname.startsWith('/study/extractions');
+      if (request.method !== 'POST' && !(isStudyExtractionRoute && (request.method === 'GET' || request.method === 'DELETE'))) {
         return errorResponse('Method not allowed', 405);
       }
 
@@ -1235,7 +1444,38 @@ export default {
         });
       }
 
+      if (isStudyExtractionRoute) {
+        if (request.method === 'POST' && url.pathname === '/study/extractions') {
+          return runStudyExtraction(request, authUser.id ?? '');
+        }
+
+        const jobId = url.pathname.split('/').filter(Boolean).slice(-1)[0];
+        const job = studyExtractionJobs.get(jobId);
+        if (!job || job.ownerId !== authUser.id) {
+          return errorResponse('Extraction job not found.', 404);
+        }
+
+        if (request.method === 'DELETE') {
+          studyExtractionJobs.delete(jobId);
+          return jsonResponse({ ok: true });
+        }
+
+        return jsonResponse(job);
+      }
+
       const body = (await request.json()) as Record<string, unknown>;
+
+      if (url.pathname === '/study/ai/enhance') {
+        try {
+          const enhanced = await runStudyAiEnhancement({
+            ...body,
+            userId: authUser.id,
+          }, env);
+          return jsonResponse(enhanced);
+        } catch (error: any) {
+          return errorResponse(error?.message ?? 'Study AI enhancement failed.', 502);
+        }
+      }
 
       const adaptivePrefix = '/api/ai/adaptive-goal/';
       if (url.pathname.startsWith(adaptivePrefix)) {

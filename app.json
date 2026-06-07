@@ -9,9 +9,16 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./assets/images/icon.png",
+      "bundleIdentifier": "com.kalendulu.app",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Kalendulu verwendet den Zugriff auf deine Fotos nur, wenn du ein Profilbild auswählen möchtest.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.raphgiii.kalendulu",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -40,11 +47,22 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-web-browser"
+      "expo-web-browser",
+      "react-native-google-mobile-ads"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "2675c24d-1616-4b3a-9156-b641d3569c18"
+      }
     }
+  },
+  "react-native-google-mobile-ads": {
+    "ios_app_id": "ca-app-pub-6093098686442874~6436839425",
+    "android_app_id": "ca-app-pub-3940256099942544~3347511713"
   }
 }

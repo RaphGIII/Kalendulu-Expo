@@ -11,5 +11,7 @@
     "typescript": "^5.8.2",
     "wrangler": "^4.35.0"
   },
-  "dependencies": {}
+  "dependencies": {
+    "fflate": "^0.8.3"
+  }
 }

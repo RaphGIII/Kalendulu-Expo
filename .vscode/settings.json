@@ -5,3 +5,9 @@
     "source.sortMembers": "explicit"
   }
 }
+{
+  "deno.enable": true,
+  "deno.enablePaths": ["./supabase/functions"],
+  "deno.config": "./supabase/functions/deno.json",
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

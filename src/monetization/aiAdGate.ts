@@ -1,102 +1,170 @@
-import { Alert } from 'react-native';
+import { Alert, Platform } from "react-native";
+import {
+  AdEventType,
+  RewardedAd,
+  RewardedAdEventType,
+  TestIds,
+} from "react-native-google-mobile-ads";
 
-export type AiAdGatePhase = 'goal_refinement' | 'planner_bundle';
+import { assertCanStartFreeAiBlueprint } from "@/src/monetization/aiQuota";
+
+export type AiAdGatePhase = "goal_refinement" | "planner_bundle";
 
 type AiAdGateInput = {
   phase: AiAdGatePhase;
-  difficultyLevel: number;
+  difficultyLevel?: number;
   estimatedInputTokens?: number;
   estimatedOutputTokens?: number;
 };
 
-type TestRewardedAdResult = {
-  watched: boolean;
-  adNumber: number;
-  totalAds: number;
-};
+const REQUIRED_ADS_PER_BLUEPRINT =
+  Number(process.env.EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT ?? 2) ||
+  2;
 
-const USD_PER_1M_INPUT = {
-  nano: 0.05,
-  mini: 0.25,
-  standard: 1.25,
-};
-
-const USD_PER_1M_OUTPUT = {
-  nano: 0.4,
-  mini: 2,
-  standard: 10,
-};
-
-const DEFAULT_TEST_ECPM_USD = 5;
-const DEFAULT_MARGIN = 1.25;
-
-function parseEnvNumber(raw: string | undefined, fallback: number) {
-  const value = Number(raw);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
-function selectCostTier(difficultyLevel: number) {
-  if (difficultyLevel >= 9) return 'standard';
-  if (difficultyLevel >= 6) return 'mini';
-  return 'nano';
-}
-
-function estimateAiCostUsd(input: AiAdGateInput) {
-  const tier = selectCostTier(input.difficultyLevel);
-  const inputTokens =
-    input.estimatedInputTokens ??
-    (input.phase === 'goal_refinement' ? 1400 : 5000);
-  const outputTokens =
-    input.estimatedOutputTokens ??
-    (input.phase === 'goal_refinement' ? 2600 : 4200);
+function getRewardedAdUnitId() {
+  if (Platform.OS !== "ios") {
+    throw new Error("Rewarded Ads sind aktuell nur für iOS konfiguriert.");
+  }
 
   return (
-    (inputTokens / 1_000_000) * USD_PER_1M_INPUT[tier] +
-    (outputTokens / 1_000_000) * USD_PER_1M_OUTPUT[tier]
+    process.env.EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID ?? TestIds.REWARDED
   );
 }
 
-export function calculateRequiredAiAds(input: AiAdGateInput) {
-  const testEcpmUsd = parseEnvNumber(
-    process.env.EXPO_PUBLIC_TEST_REWARDED_AD_ECPM_USD,
-    DEFAULT_TEST_ECPM_USD,
-  );
-  const margin = parseEnvNumber(
-    process.env.EXPO_PUBLIC_AI_AD_COST_MARGIN,
-    DEFAULT_MARGIN,
-  );
-  const revenuePerAdUsd = testEcpmUsd / 1000;
-  const coveredCostUsd = estimateAiCostUsd(input) * margin;
-
-  return Math.max(1, Math.ceil(coveredCostUsd / revenuePerAdUsd));
+function phaseToAdNumber(phase: AiAdGatePhase) {
+  return phase === "goal_refinement" ? 1 : 2;
 }
 
-async function showTestRewardedAd(adNumber: number, totalAds: number): Promise<TestRewardedAdResult> {
-  await new Promise<void>((resolve) => {
+function phaseToRewardText(phase: AiAdGatePhase) {
+  if (phase === "goal_refinement") {
+    return "die KI-Fragen zu deinem Ziel";
+  }
+
+  return "deinen vollständigen KI-Zielplan";
+}
+
+function confirmRewardedAdDisclosure(phase: AiAdGatePhase) {
+  const adNumber = phaseToAdNumber(phase);
+  const reward = phaseToRewardText(phase);
+
+  return new Promise<void>((resolve, reject) => {
     Alert.alert(
-      `Test-Werbung ${adNumber}/${totalAds}`,
-      'Dies ist der Test-Rewarded-Ad-Provider. In Produktion wird hier das echte Rewarded-Ad-SDK angeschlossen.',
-      [{ text: 'Werbung abgeschlossen', onPress: () => resolve() }],
-      { cancelable: false },
+      `Anzeige ${adNumber}/${REQUIRED_ADS_PER_BLUEPRINT}`,
+      `Sieh dir diese kurze Anzeige vollständig an, um ${reward} freizuschalten.`,
+      [
+        {
+          text: "Abbrechen",
+          style: "cancel",
+          onPress: () => reject(new Error("Anzeige abgebrochen.")),
+        },
+        {
+          text: "Anzeige ansehen",
+          onPress: () => resolve(),
+        },
+      ],
+      { cancelable: true },
     );
   });
+}
 
-  return {
-    watched: true,
-    adNumber,
-    totalAds,
-  };
+function showRewardedAdOnce(): Promise<void> {
+  const adUnitId = getRewardedAdUnitId();
+
+  return new Promise((resolve, reject) => {
+    let earnedReward = false;
+    let settled = false;
+
+    const rewarded = RewardedAd.createForAdRequest(adUnitId, {
+      requestNonPersonalizedAdsOnly: true,
+    });
+
+    const unsubscribeLoaded = rewarded.addAdEventListener(
+      RewardedAdEventType.LOADED,
+      () => {
+        rewarded.show().catch(() => {
+          settleError(new Error("Anzeige konnte nicht geöffnet werden."));
+        });
+      },
+    );
+
+    const unsubscribeEarned = rewarded.addAdEventListener(
+      RewardedAdEventType.EARNED_REWARD,
+      () => {
+        earnedReward = true;
+      },
+    );
+
+    const unsubscribeClosed = rewarded.addAdEventListener(
+      AdEventType.CLOSED,
+      () => {
+        if (earnedReward) {
+          settleSuccess();
+        } else {
+          settleError(
+            new Error(
+              "Die Anzeige wurde nicht vollständig angesehen. Die KI-Funktion wurde nicht freigeschaltet.",
+            ),
+          );
+        }
+      },
+    );
+
+    const unsubscribeError = rewarded.addAdEventListener(
+      AdEventType.ERROR,
+      () => {
+        settleError(
+          new Error(
+            "Aktuell ist keine Anzeige verfügbar. Bitte versuche es später erneut.",
+          ),
+        );
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      settleError(
+        new Error(
+          "Die Anzeige konnte nicht rechtzeitig geladen werden. Bitte versuche es später erneut.",
+        ),
+      );
+    }, 20000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      unsubscribeLoaded();
+      unsubscribeEarned();
+      unsubscribeClosed();
+      unsubscribeError();
+    }
+
+    function settleSuccess() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }
+
+    function settleError(error: Error) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    }
+
+    rewarded.load();
+  });
+}
+
+export function calculateRequiredAiAds() {
+  return REQUIRED_ADS_PER_BLUEPRINT;
 }
 
 export async function requireAiAds(input: AiAdGateInput) {
-  const requiredAds = calculateRequiredAiAds(input);
-
-  for (let adNumber = 1; adNumber <= requiredAds; adNumber += 1) {
-    const result = await showTestRewardedAd(adNumber, requiredAds);
-    if (!result.watched) {
-      throw new Error('Bitte schaue die Werbung vollstandig, damit die KI-Kosten gedeckt sind.');
-    }
+  if (input.phase === "goal_refinement") {
+    await assertCanStartFreeAiBlueprint();
   }
 
-  return requiredAds;
+  await confirmRewardedAdDisclosure(input.phase);
+  await showRewardedAdOnce();
+
+  return phaseToAdNumber(input.phase);
 }

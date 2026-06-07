@@ -7,6 +7,7 @@ import {
   Alert,
   Image,
   Pressable,
+  Linking,
   SafeAreaView,
   ScrollView,
   StyleSheet,
@@ -38,6 +39,12 @@ import {
 } from "@/src/settings/appSettings";
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { ThemeColors } from "@/src/theme/themes";
+import { LEGAL_LINKS } from "@/src/config/legalLinks";
+import {
+  openSubscriptionManagement,
+  premiumProductIds,
+  useSubscription,
+} from "@/src/billing";
 
 const PROFILE_IMAGE_STORAGE_KEY = "kalendulu:profile-image-uri:v1";
 
@@ -70,6 +77,7 @@ type SettingsSection =
   | "themes"
   | "calendar"
   | "account"
+  | "premium"
   | "notifications"
   | "about";
 
@@ -361,7 +369,24 @@ export default function SettingsScreen() {
 
   const { fullName, user, signOut, refreshProfile } = useAuth();
   const router = useRouter();
+  const subscription = useSubscription();
+  const productIds = premiumProductIds();
+  async function openExternalUrl(url: string) {
+  try {
+    const canOpen = await Linking.canOpenURL(url);
 
+    if (!canOpen) {
+      throw new Error("URL kann nicht geöffnet werden.");
+    }
+
+    await Linking.openURL(url);
+  } catch {
+    Alert.alert(
+      "Fehler",
+      "Die Seite konnte nicht geöffnet werden. Bitte versuche es später erneut.",
+    );
+  }
+}
   const [openSection, setOpenSection] = useState<SettingsSection | null>(null);
   const [storageStats, setStorageStats] = useState<{
     count: number;
@@ -801,6 +826,16 @@ export default function SettingsScreen() {
           />
           <View style={styles.separator} />
           <SectionButton
+            title="Kalendulu Premium"
+            subtitle={`Aktueller Plan: ${subscription.limits.label}`}
+            icon="diamond-outline"
+            colors={colors}
+            fontFamily={fontFamily}
+            active={openSection === "premium"}
+            onPress={() => toggleSection("premium")}
+          />
+          <View style={styles.separator} />
+          <SectionButton
             title="Benachrichtigungen"
             subtitle="Todos, Habits, Termine und tägliche Hinweise"
             icon="notifications-outline"
@@ -1224,7 +1259,15 @@ export default function SettingsScreen() {
                 />
               </View>
             </View>
-
+            <View style={[styles.settingsList, { marginBottom: 12 }]}>
+  <SettingsEntry
+    title="Was passiert bei der Account-Löschung?"
+    subtitle="Erklärung zu Konto- und Datenlöschung öffnen"
+    onPress={() => openExternalUrl(LEGAL_LINKS.deleteAccountInfo)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+</View>
             <View style={styles.detailCard}>
               <Pressable onPress={handleLogout} style={styles.logoutButton}>
                 <Ionicons name="log-out-outline" size={18} color="#FFFFFF" />
@@ -1238,6 +1281,66 @@ export default function SettingsScreen() {
                 <Ionicons name="trash-outline" size={18} color="#FFFFFF" />
                 <Text style={styles.logoutText}>Account loeschen</Text>
               </Pressable>
+            </View>
+          </>
+        )}
+
+        {openSection === "premium" && (
+          <>
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Kalendulu Premium</Text>
+              <Text style={styles.infoText}>
+                Aktueller Plan: {subscription.limits.label}
+              </Text>
+              {subscription.status.tier === "premium" ? (
+                <>
+                  <Text style={styles.infoText}>• Premium aktiv</Text>
+                  <Text style={styles.infoText}>• Grosse PDF/DOCX-Uploads bis 300 Seiten</Text>
+                  <Text style={styles.infoText}>• KI-Veredelung aktiv</Text>
+                  <Text style={styles.infoText}>• PDF/DOCX-Export aktiv</Text>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.infoText}>• Free: Themen, Text, TXT/MD und kleine PDF/DOCX-Dateien</Text>
+                  <Text style={styles.infoText}>• Student: mehr Seiten, mehrere Projekte und PDF-Export</Text>
+                  <Text style={styles.infoText}>• Premium: 300-Seiten-Skripte, Nano-KI-Veredelung und DOCX-Export</Text>
+                </>
+              )}
+
+              <View style={styles.settingsList}>
+                <SettingsEntry
+                  title="Premium ansehen"
+                  subtitle="Produkt-IDs sind fuer RevenueCat und Apple In-App Purchases vorbereitet"
+                  value={productIds.premiumYearly}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+                <SettingsEntry
+                  title="Kaeufe wiederherstellen"
+                  subtitle="Prueft RevenueCat erneut und cached den Entitlement-Status lokal"
+                  onPress={() => void subscription.restore()}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+                <View style={styles.separatorInner} />
+                <SettingsEntry
+                  title="Abo verwalten"
+                  subtitle="Oeffnet die Apple-Aboverwaltung"
+                  onPress={() => void openSubscriptionManagement()}
+                  colors={colors}
+                  fontFamily={fontFamily}
+                />
+              </View>
+            </View>
+
+            <View style={styles.detailCard}>
+              <Text style={styles.detailTitle}>Limits</Text>
+              <Text style={styles.infoText}>• Seiten pro Datei: {subscription.limits.maxPagesPerFile}</Text>
+              <Text style={styles.infoText}>• Seiten pro Monat: {subscription.limits.maxPagesPerMonth}</Text>
+              <Text style={styles.infoText}>• Max. Dateigroesse: {subscription.limits.maxFileSizeMb} MB</Text>
+              <Text style={styles.infoText}>• Aktive Lernprojekte: {subscription.limits.maxActiveProjects}</Text>
+              <Text style={styles.infoText}>• Upload-Hinweis: Originaldateien und Rohtexte werden nicht dauerhaft gespeichert.</Text>
             </View>
           </>
         )}
@@ -1422,62 +1525,41 @@ export default function SettingsScreen() {
                 anzupassen.
               </Text>
               <View style={styles.settingsList}>
-                <SettingsEntry
-                  title="Datenschutz"
-                  subtitle="Welche Daten Kalendulu verarbeitet"
-                  onPress={() => router.push("/legal/privacy" as any)}
-                  colors={colors}
-                  fontFamily={fontFamily}
-                />
-                <View style={styles.separatorInner} />
-                <SettingsEntry
-                  title="Impressum"
-                  subtitle="Betreiber- und Kontaktangaben"
-                  onPress={() => router.push("/legal/imprint" as any)}
-                  colors={colors}
-                  fontFamily={fontFamily}
-                />
-                <View style={styles.separatorInner} />
-                <SettingsEntry
-                  title="Support / Kontakt"
-                  subtitle="Hilfe, Kontakt und Datenanfragen"
-                  onPress={() => router.push("/legal/support" as any)}
-                  colors={colors}
-                  fontFamily={fontFamily}
-                />
-                <View style={styles.separatorInner} />
-                <SettingsEntry
-                  title="Account- und Datenlöschung"
-                  subtitle="Informationen zur dauerhaften Löschung"
-                  onPress={() => router.push("/delete-account" as any)}
-                  colors={colors}
-                  fontFamily={fontFamily}
-                />
-              </View>
-            </View>
+  <SettingsEntry
+    title="Datenschutz"
+    subtitle="Öffnet die öffentliche Datenschutzerklärung"
+    onPress={() => openExternalUrl(LEGAL_LINKS.privacy)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+  <View style={styles.separatorInner} />
 
-            <View style={styles.detailCard}>
-              <Text style={styles.detailTitle}>Rechtliches</Text>
-              <Text style={styles.infoText}>
-                • Datenschutz: Vor dem Store-Launch muss eine echte
-                Datenschutzerklaerung mit Betreiberangaben verlinkt werden.
-              </Text>
-              <Text style={styles.infoText}>
-                • Impressum: Fuer oeffentliche Nutzung muessen Anbieter, Kontakt
-                und verantwortliche Person sichtbar sein.
-              </Text>
-              <Text style={styles.infoText}>
-                • Account-Loeschung: Nutzer muessen ihr Konto und ihre Daten
-                vollstaendig loeschen koennen.
-              </Text>
-              <Text style={styles.infoText}>
-                • KI-Hinweis: Plaene koennen Fehler enthalten und ersetzen keine
-                medizinische, rechtliche oder finanzielle Beratung.
-              </Text>
-              <Text style={styles.infoText}>
-                • Push: Benachrichtigungen werden nur nach deiner Berechtigung
-                verwendet.
-              </Text>
+  <SettingsEntry
+    title="Impressum"
+    subtitle="Betreiber- und Kontaktangaben"
+    onPress={() => openExternalUrl(LEGAL_LINKS.imprint)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+  <View style={styles.separatorInner} />
+
+  <SettingsEntry
+    title="Support / Kontakt"
+    subtitle="Hilfe, Kontakt und Datenanfragen"
+    onPress={() => openExternalUrl(LEGAL_LINKS.support)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+  <View style={styles.separatorInner} />
+
+  <SettingsEntry
+    title="Account- und Datenlöschung"
+    subtitle="Informationen zur dauerhaften Löschung"
+    onPress={() => openExternalUrl(LEGAL_LINKS.deleteAccountInfo)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+</View>
             </View>
           </>
         )}

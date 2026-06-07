@@ -9,6 +9,7 @@ import {
   SafeAreaView,
   ScrollView,
   StatusBar,
+  Linking,
   StyleSheet,
   Text,
   TextInput,
@@ -23,7 +24,7 @@ import {
   signInWithSupabaseOAuth,
   useHandleIncomingOAuthUrl,
 } from '@/src/auth/socialAuth';
-
+import { LEGAL_LINKS } from "@/src/config/legalLinks";
 const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function RegisterScreen() {
@@ -161,7 +162,16 @@ export default function RegisterScreen() {
                     secureTextEntry
                     style={styles.input}
                   />
-
+                  <Text style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: "#8A8A8A" }}>
+  Mit der Registrierung stimmst du unserer{" "}
+  <Text
+    onPress={() => Linking.openURL(LEGAL_LINKS.privacy)}
+    style={{ color: "#7C5CFF", fontWeight: "800" }}
+  >
+    Datenschutzerklärung
+  </Text>
+  {" "}zu.
+</Text>
                   <Pressable
                     onPress={onRegister}
                     disabled={busy !== null}
