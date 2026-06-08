@@ -9,6 +9,7 @@ import { selectOpenAiModel } from './openai/modelSelection';
 import { unzipSync, strFromU8 } from 'fflate';
 import { handleStudyPageExtractionRoute } from './studyPageExtractionRoutes';
 import { parseJsonFromModelResponse } from './jsonParsing';
+import { handleStudyV2Route } from './studyV2/studyV2Routes';
 export interface Env {
   OPENAI_API_KEY: string;
   SUPABASE_URL: string;
@@ -22,6 +23,12 @@ export interface Env {
   OPENAI_STUDY_PAGE_MAX_COST_USD?: string;
   OPENAI_STUDY_PAGE_INPUT_USD_PER_1M?: string;
   OPENAI_STUDY_PAGE_OUTPUT_USD_PER_1M?: string;
+  OPENAI_STUDY_SUMMARY_MODEL?: string;
+  OPENAI_STUDY_PLAN_MODEL?: string;
+  OPENAI_STUDY_MAX_COST_USD_PER_PROJECT?: string;
+  OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT?: string;
+  OCR_PROVIDER?: 'none' | 'openai_vision' | 'external';
+  OCR_ENDPOINT_URL?: string;
 }
 
 type GoalQuestion = {
@@ -1442,10 +1449,12 @@ export default {
 
       const isStudyExtractionRoute = url.pathname.startsWith('/study/extractions');
       const isStudyPageExtractionRoute = url.pathname === '/study/page-learning-extraction';
+      const isStudyV2Route = url.pathname.startsWith('/study-v2/');
 
       if (
         request.method !== 'POST' &&
-        !(isStudyExtractionRoute && (request.method === 'GET' || request.method === 'DELETE'))
+        !(isStudyExtractionRoute && (request.method === 'GET' || request.method === 'DELETE')) &&
+        !(isStudyV2Route && (request.method === 'GET' || request.method === 'DELETE'))
       ) {
         return errorResponse('Method not allowed', 405);
       }
@@ -1472,6 +1481,10 @@ export default {
 
       if (isStudyPageExtractionRoute) {
         return handleStudyPageExtractionRoute(request, env);
+      }
+
+      if (isStudyV2Route) {
+        return handleStudyV2Route(request, env, authUser);
       }
 
       if (isStudyExtractionRoute) {

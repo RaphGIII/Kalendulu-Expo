@@ -36,7 +36,7 @@ export async function extractTextFromFile(input: {
   mimeType?: string;
   size?: number;
   tier?: UserStudyTier;
-}): Promise<{ text: string; message?: string; sections?: DetectedStudySection[] }> {
+}): Promise<{ text: string; message?: string; sections?: DetectedStudySection[]; compactText?: string }> {
   if (isPlainTextFile(input)) {
     try {
       const text = await FileSystem.readAsStringAsync(input.uri, {
@@ -45,12 +45,12 @@ export async function extractTextFromFile(input: {
 
       return {
         text,
-        message: 'Textdatei wurde gelesen und intern zur Analyse hinzugefügt.',
+        message: 'Textdatei wurde gelesen und intern zur Analyse hinzugefuegt.',
       };
     } catch {
       return {
         text: '',
-        message: 'Die Textdatei wurde ausgewählt, konnte aber nicht gelesen werden.',
+        message: 'Die Textdatei wurde ausgewaehlt, konnte aber nicht gelesen werden.',
       };
     }
   }
@@ -73,13 +73,18 @@ export async function extractTextFromFile(input: {
         };
       }
 
-      const costCents = Math.max(0, extraction.estimatedCostUsd * 100).toFixed(2);
+      const pageLabel = extraction.sourceType === 'pptx' ? 'Folien' : 'Seiten';
+      const unitCount =
+        extraction.sections.length ||
+        extraction.pages.filter((page) => page.relevance !== 'noise' && page.bullets.length > 0).length;
+      const fallbackNote = extraction.fallbackUsed ? '\nEin Teil wurde lokal strukturiert.' : '';
       const warnings = extraction.warnings.length ? `\n${extraction.warnings.join('\n')}` : '';
 
       return {
         text: '',
+        compactText: extraction.compactText,
         sections: extraction.sections,
-        message: `Datei wurde seitenweise analysiert. ${extraction.processedPages}/${extraction.pageCount} Seiten/Folien verarbeitet. Geschätzte KI-Kosten: ${costCents} Cent.${warnings}`,
+        message: `${extraction.processedPages} von ${extraction.pageCount} ${pageLabel} verarbeitet, ${unitCount} Lerneinheiten erkannt.${fallbackNote}${warnings}`,
       };
     } catch (error: any) {
       return {
@@ -94,6 +99,6 @@ export async function extractTextFromFile(input: {
   return {
     text: '',
     message:
-      'Texterkennung für Fotos, Bilder und gescannte PDFs ist noch nicht aktiviert. Bitte nutze PDFs mit auswählbarem Text, DOCX, PPTX, TXT, MD oder manuelle Themen.',
+      'Texterkennung fuer Fotos, Bilder und gescannte PDFs ist noch nicht aktiviert. Bitte nutze PDFs mit auswaehlbarem Text, DOCX, PPTX, TXT, MD oder manuelle Themen.',
   };
 }

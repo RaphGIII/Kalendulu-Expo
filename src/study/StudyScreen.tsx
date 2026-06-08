@@ -33,9 +33,7 @@ import {
   deleteStudyDay,
   deleteStudySession,
   deleteTemporaryStudyFile,
-  enhanceStudyBuildWithAi,
   estimatePagesFromFile,
-  extractTextFromFile,
   isInactiveStudyFile,
   isSupportedStudyFile,
   loadStudyProgressSteps,
@@ -48,7 +46,6 @@ import {
   addStudyUsagePages,
   completeStudyProgressStep,
   type KnowledgeUnit,
-  type DetectedStudySection,
   type StudyBuildResult,
   type StudyPlan,
   type StudyProgressStep,
@@ -59,8 +56,17 @@ import {
   type TemporaryStudyAsset,
 } from './index';
 import { exportStudyPlanAsDocx, exportStudyPlanAsPdf } from './export/studyPlanExportClient';
+import { buildStudyResultFromV2 } from './studyV2Adapter';
+import {
+  generateStudyV2Plan,
+  ingestStudyV2,
+  redactProcessingReport,
+  type StudyProcessingReport,
+  type StudyProcessingStep,
+  type StudyV2Tier,
+} from './studyV2Client';
 
-type Mode = 'home' | 'create' | 'preview' | 'detail';
+type Mode = 'home' | 'create' | 'processing' | 'preview' | 'detail';
 type MaterialInputMode = 'topics' | 'text' | 'files';
 type EditScope = 'preview' | 'detail';
 type DayDraft = {
@@ -87,6 +93,8 @@ type SessionDraft = {
 dayjs.locale('de');
 
 const FORCE_PREMIUM_FOR_LOCAL_TESTING = true;
+const FORCE_PLUS_FOR_LOCAL_TESTING = true;
+const SHOW_STUDY_PROCESSING_DEBUG = true;
 
 
 function minutesLabel(minutes: number) {
@@ -101,92 +109,6 @@ function splitTopics(value: string) {
     .split('\n')
     .map((line) => line.replace(/^[-*•\d.)\s]+/, '').trim())
     .filter(Boolean);
-}
-
-function normalizeStudyRelevanceText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/ä/g, 'ae')
-    .replace(/ö/g, 'oe')
-    .replace(/ü/g, 'ue')
-    .replace(/ß/g, 'ss');
-}
-
-const STUDY_RELEVANCE_WORDS = [
-  'definition', 'funktion', 'struktur', 'system', 'modell', 'theorie', 'konzept', 'prinzip',
-  'mechanismus', 'ursache', 'folge', 'prozess', 'entwicklung', 'klassifikation', 'diagnostik',
-  'therapie', 'klinik', 'pathophysiologie', 'histologie', 'anatomie', 'physiologie', 'biochemie',
-  'embryologie', 'topographie', 'innervation', 'versorgung', 'arterie', 'vene', 'nerv', 'muskel',
-  'organ', 'zelle', 'gewebe', 'rezeptor', 'enzym', 'hormon', 'signalweg', 'syndrom', 'symptom',
-  'prüfung', 'pruefung', 'merke', 'wichtig', 'lernziel', 'kapitel', 'übersicht', 'übersicht',
-];
-
-const STUDY_NOISE_WORDS = [
-  'raphael gmeiner', 'matrikelnummer', 'studentennummer', 'semester', 'email', 'e-mail',
-  'universität', 'universitaet', 'friedrich-schiller', 'dozent', 'professor', 'copyright',
-  'downloaded', 'generated', 'erstellt von', 'bearbeitet von', 'seite ', 'lecture notes',
-  'slide ', 'foliennummer', 'datum', 'name:', 'vorname', 'nachname', 'adresse',
-];
-
-function looksLikeOnlyPersonName(line: string) {
-  const words = line.trim().split(/\s+/).filter(Boolean);
-  if (words.length < 2 || words.length > 4) return false;
-  const capitalized = words.filter((word) => /^[A-ZÄÖÜ][a-zäöüß-]{2,}$/.test(word)).length;
-  const hasStudySignal = STUDY_RELEVANCE_WORDS.some((word) => normalizeStudyRelevanceText(line).includes(normalizeStudyRelevanceText(word)));
-  return capitalized === words.length && !hasStudySignal;
-}
-
-function studyLineScore(line: string) {
-  const clean = normalizeStudyRelevanceText(line);
-  const alphaCount = (line.match(/[A-Za-zÄÖÜäöüß]/g) ?? []).length;
-  const tokenCount = (line.match(/[A-Za-zÄÖÜäöüß]{3,}/g) ?? []).length;
-  const studySignals = STUDY_RELEVANCE_WORDS.filter((word) => clean.includes(normalizeStudyRelevanceText(word))).length;
-  const hasColonStructure = /[:;]/.test(line) && tokenCount >= 3;
-  const hasAcademicPattern = /\b([A-ZÄÖÜ][a-zäöüß]+\s+[a-zäöüß]+|[a-zäöüß]+ung|[a-zäöüß]+tion|[a-zäöüß]+ismus)\b/.test(line);
-  const listLike = /^[-*•]\s+/.test(line) || /,/.test(line);
-
-  let score = 0;
-  score += Math.min(4, studySignals * 2);
-  score += tokenCount >= 6 ? 2 : 0;
-  score += tokenCount >= 12 ? 2 : 0;
-  score += hasColonStructure ? 1 : 0;
-  score += hasAcademicPattern ? 1 : 0;
-  score += listLike ? 1 : 0;
-  score += alphaCount > 40 ? 1 : 0;
-
-  if (STUDY_NOISE_WORDS.some((word) => clean.includes(normalizeStudyRelevanceText(word)))) score -= 4;
-  if (looksLikeOnlyPersonName(line)) score -= 5;
-  if ((line.match(/\d/g) ?? []).length > line.length * 0.35) score -= 2;
-  if (/^[\W_\d]+$/.test(line)) score -= 6;
-  if (/https?:\/\//i.test(line) || /www\./i.test(line)) score -= 6;
-
-  return score;
-}
-
-function sanitizeExtractedStudyText(value: string) {
-  const lines = value
-    .replace(/\r/g, '\n')
-    .split('\n')
-    .map((line) => line.replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
-
-  const cleaned = lines.filter((line) => {
-    const lower = line.toLowerCase();
-    if (line.length < 3) return false;
-    if (/^\d+$/.test(line)) return false;
-    if (/^seite\s+\d+/i.test(line)) return false;
-    if (/^(abb\.|fig\.|figure|table|tabelle)\s*\d+/i.test(line) && line.length < 40) return false;
-    if (/https?:\/\//i.test(line) || /www\./i.test(line)) return false;
-    if (/^[\W_\d]+$/.test(line)) return false;
-    if ((line.match(/\d/g) ?? []).length > line.length * 0.45) return false;
-    if ((line.match(/[A-Za-zÄÖÜäöüß]/g) ?? []).length < 3) return false;
-    if (lower.includes('copyright') || lower.includes('all rights reserved')) return false;
-    if (lower.includes('downloaded from') || lower.includes('generated by')) return false;
-    if (looksLikeOnlyPersonName(line)) return false;
-    return studyLineScore(line) >= 0;
-  });
-
-  return cleaned.join('\n');
 }
 
 function combineStudyText(...parts: (string | undefined)[]) {
@@ -408,6 +330,11 @@ export default function StudyScreen() {
   const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
   const { status: subscription, limits } = useSubscription();
   const activeStudyTier = FORCE_PREMIUM_FOR_LOCAL_TESTING ? 'premium' : subscription.tier;
+  const activeStudyV2Tier: StudyV2Tier = FORCE_PLUS_FOR_LOCAL_TESTING
+    ? 'plus'
+    : activeStudyTier === 'premium'
+      ? 'premium'
+      : 'free';
   const activeLimits = useMemo(() => {
     if (!FORCE_PREMIUM_FOR_LOCAL_TESTING) return limits;
 
@@ -444,10 +371,11 @@ export default function StudyScreen() {
   const [manualTopicsText, setManualTopicsText] = useState('');
   const [pastedText, setPastedText] = useState('');
   const [extractedMaterialText, setExtractedMaterialText] = useState('');
-  const [extractedSections, setExtractedSections] = useState<DetectedStudySection[]>([]);
   const [files, setFiles] = useState<TemporaryStudyAsset[]>([]);
   const [uploadMessages, setUploadMessages] = useState<string[]>([]);
   const [preview, setPreview] = useState<StudyBuildResult | null>(null);
+  const [processingReport, setProcessingReport] = useState<StudyProcessingReport | null>(null);
+  const [expandedProcessingStepIds, setExpandedProcessingStepIds] = useState<Set<string>>(new Set());
   const [showExamPicker, setShowExamPicker] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
@@ -504,10 +432,11 @@ export default function StudyScreen() {
     setManualTopicsText('');
     setPastedText('');
     setExtractedMaterialText('');
-    setExtractedSections([]);
     setFiles([]);
     setUploadMessages([]);
     setPreview(null);
+    setProcessingReport(null);
+    setExpandedProcessingStepIds(new Set());
   }
 
   function showInactiveMediaMessage() {
@@ -588,25 +517,9 @@ export default function StudyScreen() {
     }
 
     setFiles((prev) => [...prev, ...newFiles]);
-
-    for (const file of newFiles) {
-      const extracted = await extractTextFromFile({ ...file, tier: activeStudyTier });
-      if (extracted.sections?.length) {
-        setExtractedSections((prev) => [
-          ...prev,
-          ...extracted.sections!.map((section, index) => ({ ...section, orderIndex: prev.length + index })),
-        ]);
-      }
-      if (extracted.text) {
-        const cleanedText = sanitizeExtractedStudyText(extracted.text);
-        if (cleanedText) {
-          setExtractedMaterialText((prev) => combineStudyText(prev, cleanedText));
-        }
-      }
-      if (extracted.message) {
-        const message = extracted.message;
-        setUploadMessages((prev) => [...prev, message]);
-      }
+    if (newFiles.length) {
+      const totalMb = newFiles.reduce((sum, file) => sum + (file.size ?? 0), 0) / 1024 / 1024;
+      setUploadMessages((prev) => [...prev, `${newFiles.length} Datei(en) bereit · ${totalMb.toFixed(1)} MB gesamt.`]);
     }
   }
 
@@ -625,7 +538,7 @@ export default function StudyScreen() {
     const manualTopics = splitTopics(manualTopicsText);
     const combinedText = combineStudyText(pastedText, extractedMaterialText);
 
-    if (!manualTopics.length && !combinedText.trim() && !extractedSections.length && !files.length) {
+    if (!manualTopics.length && !combinedText.trim() && !files.length) {
       Alert.alert('Stoff fehlt', 'Bitte gib mindestens eine Themenliste, Text oder eine Datei ein.');
       return;
     }
@@ -644,46 +557,140 @@ export default function StudyScreen() {
     try {
       setIsAnalyzing(true);
       setAnalysisProgress(4);
+      setProcessingReport(null);
+      setExpandedProcessingStepIds(new Set());
       scrollRef.current?.scrollTo({ y: 0, animated: true });
-      await advanceAnalysisProgress(18);
-
-      let result = compileStudyPlan({
-        title: cleanTitle,
-        examDate: examDate.trim() || undefined,
-        targetLevel,
-        weeklyAvailableMinutes,
-        availability,
-        bundle: {
-          manualTopics,
-          pastedText: combinedText,
-          pageLearningSections: extractedSections,
-          uploadedImages: [],
-          uploadedFiles: files,
-        },
-      });
-
-      await advanceAnalysisProgress(58);
-
-      try {
-        const enhanced = await enhanceStudyBuildWithAi(result);
-        result = enhanced.result;
-        const message = enhanced.message?.replace(/Premium-KI/g, 'KI-Veredelung');
-        if (typeof message === 'string' && message.trim().length > 0) {
-          setUploadMessages((prev) => [...prev, message]);
-        }
-      } catch {
+      if (files.length) {
+        setMode('processing');
+        const startedAt = new Date().toISOString();
+        setProcessingReport({
+          status: 'running',
+          createdAt: startedAt,
+          updatedAt: startedAt,
+          steps: [
+            {
+              id: 'files',
+              title: 'Dateien angenommen',
+              status: 'running',
+              startedAt,
+              message: `${files.length} Datei(en) werden vorbereitet.`,
+              details: {
+                fileNames: files.map((file) => file.name),
+                totalBytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
+                localTestMode: FORCE_PLUS_FOR_LOCAL_TESTING,
+              },
+            },
+          ],
+        });
+        await advanceAnalysisProgress(18);
+        const ingest = await ingestStudyV2({
+          files,
+          title: cleanTitle,
+          examDate: examDate.trim() || undefined,
+          targetLevel,
+          weeklyHours: Math.max(1, Number(weeklyHours) || 8),
+          minutesPerLearningDay,
+          tier: activeStudyV2Tier,
+        });
+        setProcessingReport(ingest.processingReport);
+        await advanceAnalysisProgress(58);
+        const generated = await generateStudyV2Plan({
+          projectId: ingest.projectId,
+          corpusDocumentId: ingest.corpusDocumentId,
+          corpusDocument: ingest.corpusDocument,
+          examDate: examDate.trim() || undefined,
+          targetLevel,
+          weeklyHours: Math.max(1, Number(weeklyHours) || 8),
+          minutesPerLearningDay,
+        });
+        const mergedReport: StudyProcessingReport = {
+          ...generated.processingReport,
+          status: generated.processingReport.status === 'success' && ingest.processingReport.status !== 'success'
+            ? ingest.processingReport.status
+            : generated.processingReport.status,
+          steps: [
+            ...ingest.processingReport.steps,
+            ...generated.processingReport.steps.filter((step) => !ingest.processingReport.steps.some((existing) => existing.id === step.id)),
+          ],
+          sourceStats: ingest.processingReport.sourceStats,
+          costStats: {
+            estimatedSummaryCostUsd: ingest.processingReport.costStats?.estimatedSummaryCostUsd ?? 0,
+            estimatedPlanCostUsd: generated.processingReport.costStats?.estimatedPlanCostUsd ?? 0,
+            maxCostUsd: generated.processingReport.costStats?.maxCostUsd ?? 0.1,
+            budgetExceeded: Boolean(ingest.processingReport.costStats?.budgetExceeded || generated.processingReport.costStats?.budgetExceeded),
+          },
+          updatedAt: new Date().toISOString(),
+        };
+        setProcessingReport(mergedReport);
+        setPreview(buildStudyResultFromV2({
+          title: cleanTitle,
+          examDate: examDate.trim() || undefined,
+          targetLevel,
+          weeklyHours: Math.max(1, Number(weeklyHours) || 8),
+          minutesPerLearningDay,
+          projectId: generated.projectId,
+          units: generated.units,
+          days: generated.days,
+          feasible: generated.feasible,
+          recommendation: generated.recommendation,
+          warnings: [...ingest.warnings, ...generated.warnings],
+        }));
         setUploadMessages((prev) => [
           ...prev,
-          'Der algorithmische Lernplan wurde erstellt. Die KI-Veredelung war gerade nicht verfügbar.',
+          `${ingest.sourceStats?.fileCount ?? files.length} Dateien verarbeitet.`,
+          `${ingest.sourceStats?.cleanedTextCharacters ?? 0} Zeichen verwertbarer Text.`,
+          'Zusammenfassung erstellt.',
+          'Lernplan erzeugt.',
         ]);
+        await advanceAnalysisProgress(88);
+      } else {
+        await advanceAnalysisProgress(18);
+        const result = compileStudyPlan({
+          title: cleanTitle,
+          examDate: examDate.trim() || undefined,
+          targetLevel,
+          weeklyAvailableMinutes,
+          availability,
+          bundle: {
+            manualTopics,
+            pastedText: combinedText,
+            uploadedImages: [],
+            uploadedFiles: files,
+          },
+        });
+        await advanceAnalysisProgress(88);
+        setPreview(result);
       }
 
-      await advanceAnalysisProgress(88);
-      setPreview(result);
       setMode('preview');
       setExpandedStudyDay(null);
       await advanceAnalysisProgress(100);
       setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 80);
+    } catch (error: any) {
+      const at = new Date().toISOString();
+      setProcessingReport((current) => ({
+        status: 'error',
+        createdAt: current?.createdAt ?? at,
+        updatedAt: at,
+        projectId: current?.projectId,
+        corpusDocumentId: current?.corpusDocumentId,
+        sourceStats: current?.sourceStats,
+        costStats: current?.costStats,
+        steps: [
+          ...(current?.steps ?? []),
+          {
+            id: `error_${Date.now()}`,
+            title: 'Fehler',
+            status: 'error',
+            startedAt: at,
+            finishedAt: at,
+            message: 'Die Verarbeitung konnte nicht abgeschlossen werden.',
+            error: error?.message ?? 'Unbekannter Fehler',
+          },
+        ],
+      }));
+      setMode(files.length ? 'processing' : 'create');
+      Alert.alert('Lernplan konnte nicht erstellt werden', error?.message ?? 'Bitte versuche es erneut.');
     } finally {
       setTimeout(() => {
         setIsAnalyzing(false);
@@ -1127,6 +1134,62 @@ export default function StudyScreen() {
     }
   }
 
+  function processingStatusLabel(status: StudyProcessingStep['status']) {
+    if (status === 'pending') return 'wartet';
+    if (status === 'running') return 'läuft';
+    if (status === 'success') return 'erfolgreich';
+    if (status === 'warning') return 'Warnung';
+    return 'fehlgeschlagen';
+  }
+
+  function processingStatusStyle(status: StudyProcessingStep['status']) {
+    if (status === 'success') return styles.processingBadgeSuccess;
+    if (status === 'warning') return styles.processingBadgeWarning;
+    if (status === 'error') return styles.processingBadgeError;
+    return styles.processingBadgeNeutral;
+  }
+
+  function toggleProcessingStep(stepId: string) {
+    setExpandedProcessingStepIds((current) => {
+      const next = new Set(current);
+      if (next.has(stepId)) next.delete(stepId);
+      else next.add(stepId);
+      return next;
+    });
+  }
+
+  async function copyDebugDetails() {
+    const redacted = redactProcessingReport(processingReport);
+    const text = JSON.stringify(redacted, null, 2);
+    const clipboard = (globalThis.navigator as any)?.clipboard;
+    if (clipboard?.writeText) {
+      await clipboard.writeText(text);
+      Alert.alert('Kopiert', 'Debug-Details wurden ohne Rohtext kopiert.');
+      return;
+    }
+    console.log('StudyProcessingReport', text);
+    Alert.alert('Debug-Details', 'Clipboard ist in dieser Umgebung nicht verfügbar. Ich habe die Details in die Konsole geschrieben.');
+  }
+
+  function renderProcessingStep(stepItem: StudyProcessingStep) {
+    const expanded = expandedProcessingStepIds.has(stepItem.id);
+    const details = stepItem.details ? JSON.stringify(stepItem.details, null, 2) : '';
+    return (
+      <Pressable key={stepItem.id} onPress={() => toggleProcessingStep(stepItem.id)} style={styles.processingCard}>
+        <View style={styles.processingHeader}>
+          <Text style={styles.projectTitle}>{stepItem.title}</Text>
+          <Text style={[styles.processingBadge, processingStatusStyle(stepItem.status)]}>{processingStatusLabel(stepItem.status)}</Text>
+        </View>
+        {stepItem.message ? <Text style={styles.metaText}>{stepItem.message}</Text> : null}
+        {stepItem.error ? <Text style={styles.warningText}>{stepItem.error}</Text> : null}
+        {stepItem.warnings?.map((warning) => <Text key={warning} style={styles.warningText}>{warning}</Text>)}
+        {expanded && SHOW_STUDY_PROCESSING_DEBUG ? (
+          <Text style={styles.debugText}>{details || 'Keine weiteren Details.'}</Text>
+        ) : null}
+      </Pressable>
+    );
+  }
+
   async function completeStep(step: StudyProgressStep) {
     await completeStudyProgressStep({
       stepId: step.id,
@@ -1135,6 +1198,54 @@ export default function StudyScreen() {
       repetitionItems: selectedPlan?.repetitionItems,
     });
     await reload();
+  }
+
+  if (mode === 'processing') {
+    const steps = processingReport?.steps ?? [];
+    const doneSteps = steps.filter((item) => item.status === 'success' || item.status === 'warning' || item.status === 'error').length;
+    const percent = steps.length ? Math.min(100, Math.round((doneSteps / Math.max(1, steps.length)) * 100)) : analysisProgress;
+    return (
+      <SafeAreaView style={styles.safe}>
+        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <Pressable onPress={() => setMode('create')} style={styles.backBtn}><Text style={styles.backText}>Zurück</Text></Pressable>
+          <Text style={styles.title}>Lernplan wird erstellt</Text>
+          <Text style={styles.subtitle}>
+            Die Prüfübersicht zeigt jeden Verarbeitungsschritt. Rohtexte werden hier nicht vollständig angezeigt.
+          </Text>
+          <View style={styles.progressTrack}>
+            <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, percent))}%` }]} />
+          </View>
+          <Text style={styles.progressText}>{percent} %</Text>
+          {SHOW_STUDY_PROCESSING_DEBUG ? (
+            <>
+              {steps.map(renderProcessingStep)}
+              {!steps.length ? <Text style={styles.emptyText}>Verarbeitung wird vorbereitet.</Text> : null}
+            </>
+          ) : (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Verarbeitung läuft</Text>
+              <Text style={styles.metaText}>Dateien werden geprüft, zusammengefasst und in Lerntage verteilt.</Text>
+            </View>
+          )}
+          <View style={styles.actionRow}>
+            <Pressable onPress={() => void analyze()} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Erneut versuchen</Text></Pressable>
+            <Pressable onPress={() => void copyDebugDetails()} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Debug-Details kopieren</Text></Pressable>
+          </View>
+          {preview ? (
+            <Pressable onPress={() => setMode('preview')} style={styles.primaryBtn}><Text style={styles.primaryText}>Lernplan anzeigen</Text></Pressable>
+          ) : null}
+          <Pressable
+            onPress={() => {
+              resetCreateForm();
+              setMode('home');
+            }}
+            style={styles.dangerBtn}
+          >
+            <Text style={styles.dangerText}>Projekt löschen</Text>
+          </Pressable>
+        </ScrollView>
+      </SafeAreaView>
+    );
   }
 
   if (isAnalyzing) {
@@ -1273,15 +1384,12 @@ export default function StudyScreen() {
             {uploadMessages.slice(-3).map((message, index) => (
               <Text key={`${message}-${index}`} style={styles.warningText}>{message}</Text>
             ))}
-            {extractedMaterialText ? (
-              <Text style={styles.successText}>Dateitext wurde bereinigt und intern zur Analyse hinzugefügt. Er wird nicht im Textfeld angezeigt.</Text>
-            ) : null}
               </>
             ) : null}
           </View>
 
           <Pressable onPress={analyze} style={styles.primaryBtn}>
-            <Text style={styles.primaryText}>Analyse starten</Text>
+            <Text style={styles.primaryText}>Lernplan erstellen</Text>
           </Pressable>
         </ScrollView>
       </SafeAreaView>
@@ -1478,6 +1586,14 @@ function makeStyles(
     sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '900', marginTop: 8, fontFamily: fontFamily.bold },
     projectCard: { backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14 },
     projectTitle: { color: colors.text, fontSize: 17, fontWeight: '900', fontFamily: fontFamily.bold },
+    processingCard: { backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14, gap: 6 },
+    processingHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+    processingBadge: { overflow: 'hidden', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900', fontFamily: fontFamily.bold },
+    processingBadgeNeutral: { color: colors.text, backgroundColor: colors.cardSecondary },
+    processingBadgeSuccess: { color: colors.success, backgroundColor: colors.cardSecondary },
+    processingBadgeWarning: { color: colors.warning, backgroundColor: colors.cardSecondary },
+    processingBadgeError: { color: colors.danger, backgroundColor: colors.cardSecondary },
+    debugText: { color: colors.textMuted, backgroundColor: colors.cardSecondary, borderRadius: 12, padding: 10, fontSize: 12, lineHeight: 17, fontFamily: fontFamily.regular },
     unitCard: { backgroundColor: colors.card, borderRadius: 16, borderWidth: 1, borderColor: colors.border, padding: 14 },
     unitDisabled: { opacity: 0.45 },
     unitHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 6 },

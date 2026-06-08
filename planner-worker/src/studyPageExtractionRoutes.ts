@@ -19,6 +19,12 @@ type SourcePage = {
   text: string;
 };
 
+type SourcePagesResult = {
+  pages: SourcePage[];
+  warnings: string[];
+  sourceItemCount: number;
+};
+
 type PageLearningUnit = {
   sourceIndex: number;
   sourceLabel: string;
@@ -69,6 +75,28 @@ function decodeXmlEntities(value: string) {
 
 function xmlText(value: string) {
   return normalizeWhitespace(decodeXmlEntities(value.replace(/<[^>]+>/g, ' ')));
+}
+
+function extractOpenXmlText(xml: string) {
+  const matches: string[] = [];
+  const seen = new Set<string>();
+  const patterns = [
+    /<a:t[^>]*>([\s\S]*?)<\/a:t>/g,
+    /<[^:>]*:t[^>]*>([\s\S]*?)<\/[^:>]*:t>/g,
+    /<t[^>]*>([\s\S]*?)<\/t>/g,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of xml.matchAll(pattern)) {
+      const text = xmlText(match[1]).replace(/\s+/g, ' ').trim();
+      if (text.length < 2 || seen.has(text)) continue;
+      seen.add(text);
+      matches.push(text);
+    }
+    if (matches.length) break;
+  }
+
+  return normalizeWhitespace(matches.join('\n'));
 }
 
 function detectSourceType(name: string, mimeType?: string): SourceType | null {
@@ -152,25 +180,39 @@ function extractDocxPages(buffer: ArrayBuffer) {
   return splitByWordBudget(paragraphs, 'Seite');
 }
 
-function extractPptxPages(buffer: ArrayBuffer) {
+function extractPptxSlides(buffer: ArrayBuffer): SourcePage[] {
   const zip = unzipSync(new Uint8Array(buffer));
   const slideEntries = Object.entries(zip)
     .filter(([name]) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
     .sort(([a], [b]) => Number(a.match(/slide(\d+)\.xml/)?.[1] ?? 0) - Number(b.match(/slide(\d+)\.xml/)?.[1] ?? 0));
 
+  const notesBySlide = new Map<number, string>();
+  for (const [name, data] of Object.entries(zip)) {
+    if (!/^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name)) continue;
+    const sourceIndex = Number(name.match(/notesSlide(\d+)\.xml/)?.[1] ?? 0);
+    const text = sanitizeStudyText(extractOpenXmlText(strFromU8(data)));
+    if (sourceIndex > 0 && text.length >= 10) notesBySlide.set(sourceIndex, text);
+  }
+
   return slideEntries.map(([name, data], index) => {
     const sourceIndex = Number(name.match(/slide(\d+)\.xml/)?.[1] ?? index + 1);
-    const xml = strFromU8(data);
-    const text = [...xml.matchAll(/<a:t>([\s\S]*?)<\/a:t>/g)]
-      .map((match) => xmlText(match[1]))
-      .filter(Boolean)
-      .join('\n');
+    const slideText = sanitizeStudyText(extractOpenXmlText(strFromU8(data)));
+    const notesText = notesBySlide.get(sourceIndex) ?? '';
+    const lines = [...slideText.split('\n'), ...notesText.split('\n')]
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const text = sanitizeStudyText(Array.from(new Set(lines)).join('\n'));
     return {
       sourceIndex,
       sourceLabel: `Folie ${sourceIndex}`,
       text: sanitizeStudyText(text),
     };
-  }).filter((page) => page.text.length >= 30);
+  }).filter((page) => page.text.length >= 10);
+}
+
+function countPptxSlides(buffer: ArrayBuffer) {
+  const zip = unzipSync(new Uint8Array(buffer));
+  return Object.keys(zip).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).length;
 }
 
 function decodePdfString(value: string) {
@@ -248,6 +290,70 @@ function clampMinutes(relevance: Relevance, value: number) {
   return Math.max(5, Math.min(12, value || 8));
 }
 
+const MEDICAL_KEYWORDS = [
+  'anatomie',
+  'arterie',
+  'bakterien',
+  'diagnostik',
+  'differentialdiagnose',
+  'embryologie',
+  'funktion',
+  'histologie',
+  'hormone',
+  'innervation',
+  'kontraindikation',
+  'ligament',
+  'muskel',
+  'nerv',
+  'pathologie',
+  'physiologie',
+  'rezeptor',
+  'symptom',
+  'therapie',
+  'vene',
+];
+
+const GENERIC_BULLET_PATTERN =
+  /^(lernstoff|stoff|inhalt|thema|seite|folie|wichtig|grundlagen|zusammenfassung|ueberblick|lernziel|pruefung|kapitel)\b/i;
+
+function termScore(term: string, count: number) {
+  const lower = term.toLowerCase();
+  const medicalBoost = MEDICAL_KEYWORDS.some((keyword) => lower.includes(keyword)) ? 8 : 0;
+  const shapeBoost = /^[A-Z]/.test(term) ? 2 : 0;
+  return count * 2 + medicalBoost + shapeBoost + Math.min(4, term.length / 6);
+}
+
+function extractKeyTerms(text: string, limit = 8) {
+  const counts = new Map<string, { term: string; count: number }>();
+  for (const match of text.matchAll(/[A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß-]{3,}/g)) {
+    const term = match[0].replace(/^-|-$/g, '');
+    if (/^(seite|folie|name|stoff|viel|literatur|impressum|kapitel|diese|dieser|dieses|werden|wurde|kann|koennen)$/i.test(term)) {
+      continue;
+    }
+    if (/raphael|gmeiner/i.test(term)) continue;
+    const key = term.toLowerCase();
+    const current = counts.get(key);
+    counts.set(key, { term: current?.term ?? term, count: (current?.count ?? 0) + 1 });
+  }
+
+  return Array.from(counts.values())
+    .map(({ term, count }) => ({ term, score: termScore(term, count) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ term }) => term);
+}
+
+function cleanFallbackBullet(line: string) {
+  const bullet = line
+    .replace(/^[-*•\d.)\s]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (bullet.length < 12) return '';
+  if (/raphael|gmeiner|@|https?:|www\./i.test(bullet)) return '';
+  if (GENERIC_BULLET_PATTERN.test(bullet)) return '';
+  return bullet.length > 120 ? `${bullet.slice(0, 117)}...` : bullet;
+}
+
 function safeHeading(value: string, fallback: string) {
   let heading = value
     .replace(/^[-*\d.)\s]+/, '')
@@ -261,7 +367,7 @@ function safeHeading(value: string, fallback: string) {
   if (
     !heading ||
     /^\d+$/.test(heading) ||
-    /^(wie viel|wieviel|stoff|stoffmenge|seite|folie|kapitel|gliederung|literatur|impressum|name)$/i.test(heading) ||
+    /^(wie viel|wieviel|lernen|grundlagen|ueberblick|stoff|stoffmenge|seite|folie|kapitel|gliederung|literatur|impressum|name)$/i.test(heading) ||
     /raphael|gmeiner|@|https?:|www\./i.test(heading)
   ) {
     heading = fallback;
@@ -271,29 +377,30 @@ function safeHeading(value: string, fallback: string) {
 }
 
 function fallbackHeading(page: SourcePage) {
-  const words = page.text.match(/[A-Za-zÄÖÜäöüß]{4,}/g) ?? [];
-  const blacklist = /^(seite|folie|name|stoff|wie|viel|literatur|impressum|kapitel)$/i;
-  const picked = Array.from(new Set(words.filter((word) => !blacklist.test(word) && !/raphael|gmeiner/i.test(word))))
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 2);
+  const picked = extractKeyTerms(page.text, 2);
   return picked.join(' ') || 'Lernen';
 }
 
 function fallbackUnit(page: SourcePage): PageLearningUnit {
+  const keyTerms = extractKeyTerms(page.text, 6);
   const sentences = page.text
     .split(/(?<=[.!?])\s+|\n+/)
-    .map((line) => line.trim())
-    .filter((line) => line.length >= 18)
-    .filter((line) => !/raphael|gmeiner|@|https?:|www\./i.test(line))
+    .map(cleanFallbackBullet)
+    .filter(Boolean)
     .slice(0, 5)
-    .map((line) => line.length > 110 ? `${line.slice(0, 107)}...` : line);
-  const relevance: Relevance = page.text.length < 80 || sentences.length < 2 ? 'noise' : page.text.length > 1200 ? 'high' : 'medium';
+    .map((line) => {
+      const term = keyTerms.find((keyTerm) => line.toLowerCase().includes(keyTerm.toLowerCase()));
+      return term ? `${term}: ${line}` : line;
+    });
+  const termBullets = keyTerms.slice(0, 4).map((term) => `${term} aus dem Material erklaeren`);
+  const bullets = Array.from(new Set([...sentences, ...termBullets])).slice(0, 6);
+  const relevance: Relevance = page.text.length < 80 || bullets.length < 2 ? 'noise' : page.text.length > 1200 ? 'high' : 'medium';
 
   return {
     sourceIndex: page.sourceIndex,
     sourceLabel: page.sourceLabel,
     heading: safeHeading(fallbackHeading(page), 'Lernen'),
-    bullets: relevance === 'noise' ? [] : sentences,
+    bullets: relevance === 'noise' ? [] : bullets,
     relevance,
     estimatedMinutes: clampMinutes(relevance, relevance === 'high' ? 30 : 18),
     difficulty: relevance === 'high' ? 4 : relevance === 'medium' ? 3 : 1,
@@ -302,20 +409,31 @@ function fallbackUnit(page: SourcePage): PageLearningUnit {
 }
 
 function normalizeUnit(raw: any, page: SourcePage): PageLearningUnit {
+  const fallback = fallbackUnit(page);
   const rawRelevance = String(raw?.relevance ?? 'medium');
   const relevance: Relevance = rawRelevance === 'high' || rawRelevance === 'medium' || rawRelevance === 'low' || rawRelevance === 'noise'
     ? rawRelevance
     : 'medium';
   const bullets: string[] = Array.isArray(raw?.bullets)
-    ? Array.from(new Set<string>(raw.bullets.map((item: unknown) => String(item).replace(/^[-*\d.)\s]+/, '').trim()).filter(Boolean))).slice(0, 8)
+    ? Array.from(new Set<string>(
+      raw.bullets
+        .map((item: unknown) => cleanFallbackBullet(String(item)))
+        .filter(Boolean),
+    )).slice(0, 8)
     : [];
-  const safeRelevance = relevance !== 'noise' && bullets.length < 2 ? 'noise' : relevance;
+  const safeRelevance: Relevance =
+    relevance === 'noise' && fallback.relevance !== 'noise'
+      ? fallback.relevance
+      : relevance !== 'noise' && bullets.length < 2
+        ? fallback.relevance
+        : relevance;
+  const safeBullets = bullets.length >= 2 ? bullets : fallback.bullets;
 
   return {
     sourceIndex: page.sourceIndex,
     sourceLabel: page.sourceLabel,
     heading: safeHeading(String(raw?.heading ?? ''), fallbackHeading(page)),
-    bullets: safeRelevance === 'noise' ? [] : bullets,
+    bullets: safeRelevance === 'noise' ? [] : safeBullets,
     relevance: safeRelevance,
     estimatedMinutes: clampMinutes(safeRelevance, Number(raw?.estimatedMinutes ?? 15)),
     difficulty: Math.max(1, Math.min(5, Number(raw?.difficulty ?? 3))) as 1 | 2 | 3 | 4 | 5,
@@ -326,15 +444,18 @@ function normalizeUnit(raw: any, page: SourcePage): PageLearningUnit {
 function systemPrompt() {
   return [
     'Du bist Kalendulu Study Extractor.',
-    'Du erhaeltst Lernmaterial seitenweise oder folienweise.',
+    'Du erhaeltst Lernmaterial seitenweise oder folienweise und strukturierst es fuer pruefungsorientiertes Lernen.',
     'Antworte ausschliesslich mit gueltigem JSON. Keine Markdown-Fences. Keine Erklaerungen.',
     'Filtere irrelevante Verwaltungsdaten, Namen, Seitenzahlen, E-Mails, URLs, Literaturverzeichnisse, Impressum, Copyright, reine Zahlen und Formularreste aus.',
     'Erzeuge pro Seite/Folie hoechstens eine kompakte Lerneinheit.',
-    'Wenn die Seite nicht lernrelevant ist, setze relevance auf "noise".',
-    'heading maximal 2 Woerter.',
-    'bullets 3-8 kurze deutsche Stichpunkte. Keine ganzen Saetze, keine langen Absaetze.',
+    'Wenn eine Seite/Folie echte Fachinhalte enthaelt, markiere sie nicht als noise.',
+    'heading maximal 2 Woerter, fachlich konkret, keine generischen Titel wie Lernen, Stoff, Grundlagen, Ueberblick, Kapitel.',
+    'bullets 3-8 kurze deutsche Lernaufgaben mit konkreten Begriffen aus dem Material.',
+    'Priorisiere Definitionen, Ursachen, Symptome, Diagnostik, Therapie, Anatomie, Physiologie, Pathologie, Klassifikationen, Mechanismen und Pruefungsfallen.',
+    'Medizinische und naturwissenschaftliche Fachbegriffe muessen erhalten bleiben.',
+    'Keine Platzhalter, keine Phasen, keine Fortschrittsnamen, keine ganzen Absaetze.',
     'Keine erfundenen Inhalte. Nur Inhalte aus der jeweiligen Seite/Folie.',
-    'Response Shape: {"items":[{"sourceIndex":1,"heading":"string","bullets":["string"],"relevance":"high|medium|low|noise","estimatedMinutes":0}]}',
+    'Response Shape: {"items":[{"sourceIndex":1,"heading":"string","bullets":["string"],"relevance":"high|medium|low|noise","estimatedMinutes":0,"difficulty":3,"importance":4}]}',
   ].join('\n');
 }
 
@@ -409,12 +530,26 @@ function sectionsFromUnits(units: PageLearningUnit[]) {
     }));
 }
 
-async function readSourcePages(file: File, sourceType: SourceType) {
+async function readSourcePages(file: File, sourceType: SourceType): Promise<SourcePagesResult> {
   const buffer = await file.arrayBuffer();
-  if (sourceType === 'docx') return extractDocxPages(buffer);
-  if (sourceType === 'pptx') return extractPptxPages(buffer);
-  if (sourceType === 'pdf') return extractPdfPages(buffer);
-  return splitByWordBudget(new TextDecoder('utf-8').decode(buffer), 'Seite');
+  if (sourceType === 'docx') {
+    const pages = extractDocxPages(buffer);
+    return { pages, warnings: [], sourceItemCount: pages.length };
+  }
+  if (sourceType === 'pptx') {
+    const pages = extractPptxSlides(buffer);
+    const sourceItemCount = countPptxSlides(buffer);
+    const warnings = sourceItemCount > pages.length && pages.length > 0
+      ? ['Einige Folien enthielten keinen auswaehlbaren Text und wurden uebersprungen.']
+      : [];
+    return { pages, warnings, sourceItemCount };
+  }
+  if (sourceType === 'pdf') {
+    const pages = extractPdfPages(buffer);
+    return { pages, warnings: [], sourceItemCount: pages.length };
+  }
+  const pages = splitByWordBudget(new TextDecoder('utf-8').decode(buffer), 'Seite');
+  return { pages, warnings: [], sourceItemCount: pages.length };
 }
 
 export async function handleStudyPageExtractionRoute(request: Request, env: StudyPageExtractionEnv) {
@@ -432,21 +567,25 @@ export async function handleStudyPageExtractionRoute(request: Request, env: Stud
 
     const warnings: string[] = [];
     const maxCostUsd = maxBudget(env, String(form.get('maxCostUsd') ?? ''));
-    const sourcePages = await readSourcePages(file, sourceType);
+    const source = await readSourcePages(file, sourceType);
+    const sourcePages = source.pages;
+    warnings.push(...source.warnings);
     if (!sourcePages.length) {
       const message = sourceType === 'pdf'
         ? 'Diese PDF scheint gescannt zu sein oder enthaelt keinen auswaehlbaren Text. OCR ist noch nicht aktiviert.'
-        : 'In dieser Datei konnte kein verwertbarer Text gefunden werden.';
+        : sourceType === 'pptx'
+          ? 'Diese Praesentation enthaelt vermutlich ueberwiegend Bilder oder Screenshots. Ohne OCR koennen daraus noch keine Inhalte gelesen werden.'
+          : 'In dieser Datei konnte kein verwertbarer Text gefunden werden.';
       return errorResponse(message, 422, {
         ok: false,
         sourceType,
-        pageCount: 0,
+        pageCount: source.sourceItemCount,
         estimatedCostUsd: 0,
         maxCostUsd,
         budgetExceeded: false,
         pagesProcessedByAi: 0,
         pagesProcessedByFallback: 0,
-        warnings: [message],
+        warnings: [...warnings, message],
       });
     }
 
@@ -463,7 +602,7 @@ export async function handleStudyPageExtractionRoute(request: Request, env: Stud
 
     estimatedCostUsd = estimateCallCost(aiPages, maxCharsPerPage, env);
     const budgetExceeded = fallbackPages.length > 0;
-    if (budgetExceeded) warnings.push('Das KI-Budget wurde erreicht. Ein Teil wurde lokal strukturiert.');
+    if (budgetExceeded) warnings.push('Ein Teil wurde lokal strukturiert, weil das Kostenlimit erreicht wurde.');
 
     const batchSize = 8;
     const units: PageLearningUnit[] = [];
@@ -485,7 +624,7 @@ export async function handleStudyPageExtractionRoute(request: Request, env: Stud
       jobId: `page_extract_${Date.now()}`,
       status: 'done',
       sourceType,
-      pageCount: sourcePages.length,
+      pageCount: source.sourceItemCount || sourcePages.length,
       estimatedCostUsd,
       maxCostUsd,
       budgetExceeded,
@@ -494,7 +633,7 @@ export async function handleStudyPageExtractionRoute(request: Request, env: Stud
       processedPages: aiPages.length + fallbackPages.length,
       progress: {
         currentPage: aiPages.length + fallbackPages.length,
-        totalPages: sourcePages.length,
+        totalPages: source.sourceItemCount || sourcePages.length,
         percent: 100,
         stage: 'done',
       },
