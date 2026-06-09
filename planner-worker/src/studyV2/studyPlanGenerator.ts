@@ -8,6 +8,7 @@ import type {
   StudyV2TargetLevel,
 } from './types';
 import { callOpenAiJson, estimatedCost, safeHeading } from './studyAi';
+import { logStudyStep } from './studyLogger';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
@@ -178,8 +179,54 @@ function validatePlan(days: StudyDayV2[], units: StudyLearningUnitV2[]) {
   return warnings;
 }
 
+const studyPlanJsonSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    units: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          heading: { type: 'string' },
+          bullets: { type: 'array', items: { type: 'string' } },
+          difficulty: { type: 'number' },
+          importance: { type: 'number' },
+          estimatedMinutes: { type: 'number' },
+          orderIndex: { type: 'number' },
+        },
+      },
+    },
+    days: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          dayIndex: { type: 'number' },
+          date: { type: 'string' },
+          learnSlots: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          reviewSlots: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        },
+      },
+    },
+    feasible: { type: 'boolean' },
+    recommendation: { type: 'string' },
+  },
+};
+
+function unwrapPlanResponse(raw: any) {
+  if (Array.isArray(raw?.units)) return raw;
+  if (Array.isArray(raw?.output?.units)) return raw.output;
+  if (Array.isArray(raw?.plan?.units)) return raw.plan;
+  if (Array.isArray(raw?.studyPlan?.units)) return raw.studyPlan;
+  return raw;
+}
+
 export async function generateStudyPlanFromCorpus(input: {
   env: StudyV2Env;
+  requestId: string;
   corpus: StudyCorpusDocumentV2;
   examDate?: string;
   weeklyHours: number;
@@ -194,7 +241,29 @@ export async function generateStudyPlanFromCorpus(input: {
   if (cost > maxCost) warnings.push('Ein Teil wurde lokal strukturiert, weil das Kostenlimit erreicht wurde.');
 
   let raw: any = null;
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.corpus.projectId,
+    userId: input.corpus.userId,
+    stage: 'plan_generation_started',
+    status: 'start',
+    message: 'Planerzeugung aus StudyCorpusDocument gestartet.',
+    details: {
+      summaryCharacters: input.corpus.summaryMarkdown.length,
+      topicCount: input.corpus.structuredSummaryJson.topics.length,
+      estimatedCostUsd: cost,
+      maxCost,
+    },
+  });
   if (!fallbackUsed) {
+    logStudyStep({
+      requestId: input.requestId,
+      projectId: input.corpus.projectId,
+      userId: input.corpus.userId,
+      stage: 'plan_ai_started',
+      status: 'start',
+      message: 'Zweite KI fuer Lernplan gestartet.',
+    });
     raw = await callOpenAiJson(
       input.env,
       model,
@@ -215,18 +284,37 @@ export async function generateStudyPlanFromCorpus(input: {
         weeklyHours: input.weeklyHours,
         minutesPerLearningDay: input.minutesPerLearningDay,
         targetLevel: input.targetLevel,
-        output: {
-          units: [{ heading: 'string', bullets: ['string'], difficulty: 1, importance: 1, estimatedMinutes: 30, orderIndex: 0 }],
-          days: [{ dayIndex: 1, date: 'YYYY-MM-DD', learnSlots: [], reviewSlots: [] }],
-          feasible: true,
-          recommendation: 'string',
-        },
+        requiredOutput:
+          'Return JSON with top-level keys units, days, feasible, recommendation. Do not wrap it in output.',
+        unitsShape: [{ heading: 'string', bullets: ['string'], difficulty: 1, importance: 1, estimatedMinutes: 30, orderIndex: 0 }],
+        daysShape: [{ dayIndex: 1, date: 'YYYY-MM-DD', learnSlots: [], reviewSlots: [] }],
       }),
-      4500,
+      6500,
+      'kalendulu_study_plan',
+      studyPlanJsonSchema,
     );
-    if (!raw?.units) {
+    raw = unwrapPlanResponse(raw);
+    if (!Array.isArray(raw?.units)) {
       fallbackUsed = true;
       warnings.push('Lernplan wurde lokal erzeugt, weil die KI-Antwort nicht gueltig war.');
+      logStudyStep({
+        requestId: input.requestId,
+        projectId: input.corpus.projectId,
+        userId: input.corpus.userId,
+        stage: 'plan_ai_success',
+        status: 'warning',
+        message: 'Plan-KI-Antwort ungueltig; lokaler Fallback wird genutzt.',
+      });
+    } else {
+      logStudyStep({
+        requestId: input.requestId,
+        projectId: input.corpus.projectId,
+        userId: input.corpus.userId,
+        stage: 'plan_ai_success',
+        status: 'success',
+        message: 'Plan-KI-Antwort erhalten und geparst.',
+        details: { rawUnitCount: Array.isArray(raw.units) ? raw.units.length : 0 },
+      });
     }
   }
 
@@ -240,7 +328,30 @@ export async function generateStudyPlanFromCorpus(input: {
     weeklyHours: input.weeklyHours,
     minutesPerLearningDay: input.minutesPerLearningDay,
   });
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.corpus.projectId,
+    userId: input.corpus.userId,
+    stage: 'plan_validation_started',
+    status: 'start',
+    message: 'Planvalidierung gestartet.',
+    details: { unitCount: units.length, dayCount: days.length },
+  });
   const validationWarnings = validatePlan(days, units);
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.corpus.projectId,
+    userId: input.corpus.userId,
+    stage: 'plan_validation_success',
+    status: validationWarnings.length ? 'warning' : 'success',
+    message: validationWarnings.length ? 'Plan mit Warnungen validiert.' : 'Plan erfolgreich validiert.',
+    details: {
+      unitCount: units.length,
+      dayCount: days.length,
+      slotCount: days.reduce((sum, day) => sum + day.slots.length + day.reviewSlots.length, 0),
+      warningCount: validationWarnings.length,
+    },
+  });
   const required = days.reduce((sum, day) => sum + day.totalMinutes, 0);
   const available = Math.max(input.weeklyHours * 60, input.minutesPerLearningDay * Math.max(1, days.length));
   const feasible = required <= available * 1.15 || !input.examDate;

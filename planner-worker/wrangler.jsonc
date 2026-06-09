@@ -15,7 +15,8 @@
     "OPENAI_STUDY_PLAN_MODEL": "gpt-5-nano",
     "OPENAI_STUDY_MAX_COST_USD_PER_PROJECT": "0.10",
     "OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT": "0.25",
-    "OCR_PROVIDER": "none",
+    "OCR_PROVIDER": "mistral_ocr",
+    "OCR_MAX_COST_USD_PER_PROJECT": "0.30",
     "SUPABASE_URL": "https://poupgnhlapvgoeeqjbbe.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_m3tYbzYlg3UEwK81EvWZTw_de0W8iNy"
   }

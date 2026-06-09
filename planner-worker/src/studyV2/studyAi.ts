@@ -1,4 +1,5 @@
 import { parseJsonFromModelResponse } from '../jsonParsing';
+import { logStudyStep } from './studyLogger';
 import type { CorpusSummaryResult, StudyCorpusDocumentV2, StudyCorpusTopic, StudyV2Env } from './types';
 
 function clamp(value: number, min: number, max: number) {
@@ -78,9 +79,61 @@ function fallbackSummary(title: string, text: string) {
   };
 }
 
-async function callOpenAiJson(env: StudyV2Env, model: string, system: string, user: string, maxTokens: number) {
+const summaryJsonSchema = {
+  type: 'object',
+  additionalProperties: true,
+  properties: {
+    title: { type: 'string' },
+    summaryMarkdown: { type: 'string' },
+    structuredSummaryJson: {
+      type: 'object',
+      additionalProperties: true,
+      properties: {
+        topics: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: true,
+            properties: {
+              heading: { type: 'string' },
+              keyPoints: { type: 'array', items: { type: 'string' } },
+              importance: { type: 'number' },
+              difficulty: { type: 'number' },
+              estimatedWeight: { type: 'number' },
+            },
+          },
+        },
+        globalKeywords: { type: 'array', items: { type: 'string' } },
+        omittedNoiseSummary: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  },
+};
+
+function responseTextFormat(name: string, schema?: Record<string, unknown>) {
+  return schema
+    ? { type: 'json_schema', name, schema, strict: false }
+    : { type: 'json_object' };
+}
+
+function chatResponseFormat(name: string, schema?: Record<string, unknown>) {
+  return schema
+    ? { type: 'json_schema', json_schema: { name, schema, strict: false } }
+    : { type: 'json_object' };
+}
+
+async function callOpenAiJson(
+  env: StudyV2Env,
+  model: string,
+  system: string,
+  user: string,
+  maxTokens: number,
+  schemaName = 'kalendulu_json',
+  schema?: Record<string, unknown>,
+) {
   if (!env.OPENAI_API_KEY) return null;
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+
+  const responsesRes = await fetch('https://api.openai.com/v1/responses', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.OPENAI_API_KEY}`,
@@ -88,7 +141,34 @@ async function callOpenAiJson(env: StudyV2Env, model: string, system: string, us
     },
     body: JSON.stringify({
       model,
-      response_format: { type: 'json_object' },
+      input: [
+        { role: 'system', content: system },
+        { role: 'user', content: user },
+      ],
+      max_output_tokens: maxTokens,
+      reasoning: { effort: 'minimal' },
+      text: { format: responseTextFormat(schemaName, schema) },
+    }),
+  });
+
+  const responsesRaw = await responsesRes.text();
+  if (responsesRes.ok) {
+    const envelope = parseJsonFromModelResponse<any>(responsesRaw);
+    const outputText = extractOpenAiResponsesText(envelope);
+    const parsed = outputText ? parseJsonFromModelResponse<any>(outputText) : null;
+    if (parsed) return parsed;
+  }
+
+  const chatRes = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      response_format: chatResponseFormat(schemaName, schema),
+      reasoning_effort: 'minimal',
       messages: [
         { role: 'system', content: system },
         { role: 'user', content: user },
@@ -96,11 +176,22 @@ async function callOpenAiJson(env: StudyV2Env, model: string, system: string, us
       max_completion_tokens: maxTokens,
     }),
   });
-  const raw = await res.text();
-  if (!res.ok) return null;
+  const raw = await chatRes.text();
+  if (!chatRes.ok) return null;
   const envelope = parseJsonFromModelResponse<any>(raw);
   const content = envelope?.choices?.[0]?.message?.content;
   return typeof content === 'string' ? parseJsonFromModelResponse<any>(content) : null;
+}
+
+function extractOpenAiResponsesText(envelope: any) {
+  if (typeof envelope?.output_text === 'string') return envelope.output_text;
+  const output = Array.isArray(envelope?.output) ? envelope.output : [];
+  return output
+    .flatMap((item: any) => Array.isArray(item?.content) ? item.content : [])
+    .map((content: any) => content?.text ?? content?.json ?? '')
+    .filter((text: unknown): text is string => typeof text === 'string' && text.trim().length > 0)
+    .join('\n')
+    .trim();
 }
 
 function normalizeSummary(raw: any, fallbackTitle: string, fallbackText: string) {
@@ -138,6 +229,7 @@ function normalizeSummary(raw: any, fallbackTitle: string, fallbackText: string)
 
 export async function buildCorpusSummary(input: {
   env: StudyV2Env;
+  requestId: string;
   projectId: string;
   userId: string;
   title: string;
@@ -152,6 +244,15 @@ export async function buildCorpusSummary(input: {
   const estimatedCostUsd = estimatedCost(input.cleanedText.length, Math.min(14000, input.cleanedText.length / 3));
   let fallbackUsed = !input.env.OPENAI_API_KEY || estimatedCostUsd > maxCost;
   if (estimatedCostUsd > maxCost) warnings.push('Ein Teil wurde lokal strukturiert, weil das Kostenlimit erreicht wurde.');
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.projectId,
+    userId: input.userId,
+    stage: 'summarization_started',
+    status: fallbackUsed ? 'warning' : 'start',
+    message: fallbackUsed ? 'Zusammenfassung startet im lokalen Fallback.' : 'KI-Zusammenfassung gestartet.',
+    details: { chunkCount: parts.length, cleanedTextCharacters: input.cleanedText.length, estimatedCostUsd, maxCost },
+  });
 
   const system = [
     'Du bist Kalendulu Corpus Summarizer.',
@@ -168,28 +269,74 @@ export async function buildCorpusSummary(input: {
   if (!fallbackUsed) {
     const chunkSummaries: string[] = [];
     for (const [index, part] of parts.entries()) {
+      logStudyStep({
+        requestId: input.requestId,
+        projectId: input.projectId,
+        userId: input.userId,
+        stage: 'summarization_chunk_started',
+        status: 'start',
+        message: `Summary-Chunk ${index + 1}/${parts.length} gestartet.`,
+        details: { chunkIndex: index + 1, chunkCharacters: part.length },
+      });
       const chunkJson = await callOpenAiJson(
         input.env,
         model,
         system,
-        `Erstelle eine Zwischenzusammenfassung fuer Chunk ${index + 1}/${parts.length}.\n\n${part}`,
-        1800,
+        [
+          `Erstelle eine Zwischenzusammenfassung fuer Chunk ${index + 1}/${parts.length}.`,
+          'Antworte als JSON mit exakt diesen Hauptfeldern: title, summaryMarkdown, structuredSummaryJson.',
+          'structuredSummaryJson.topics muss fachliche Themen mit heading, keyPoints, importance, difficulty und estimatedWeight enthalten.',
+          '',
+          part,
+        ].join('\n'),
+        2600,
+        'kalendulu_study_summary',
+        summaryJsonSchema,
       );
       if (chunkJson?.summaryMarkdown || chunkJson?.structuredSummaryJson) {
         chunkSummaries.push(JSON.stringify(chunkJson));
+        logStudyStep({
+          requestId: input.requestId,
+          projectId: input.projectId,
+          userId: input.userId,
+          stage: 'summarization_chunk_success',
+          status: 'success',
+          message: `Summary-Chunk ${index + 1}/${parts.length} erfolgreich.`,
+          details: { chunkIndex: index + 1 },
+        });
       } else {
         fallbackUsed = true;
         warnings.push(`Chunk ${index + 1} wurde lokal zusammengefasst.`);
         chunkSummaries.push(fallbackSummary(input.title, part).summaryMarkdown);
+        logStudyStep({
+          requestId: input.requestId,
+          projectId: input.projectId,
+          userId: input.userId,
+          stage: 'summarization_chunk_success',
+          status: 'warning',
+          message: `Summary-Chunk ${index + 1}/${parts.length} lokal zusammengefasst.`,
+          details: { chunkIndex: index + 1 },
+        });
       }
     }
 
+    logStudyStep({
+      requestId: input.requestId,
+      projectId: input.projectId,
+      userId: input.userId,
+      stage: 'summarization_merge_started',
+      status: 'start',
+      message: 'Merge der Chunk-Zusammenfassungen gestartet.',
+      details: { chunkCount: chunkSummaries.length },
+    });
     rawSummary = await callOpenAiJson(
       input.env,
       model,
       system,
       `Fuehre diese Chunk-Zusammenfassungen zu einem StudyCorpusDocument zusammen.\nOutput: {"title":"string","summaryMarkdown":"string","structuredSummaryJson":{"topics":[{"heading":"string","keyPoints":["string"],"importance":1,"difficulty":1,"estimatedWeight":1}],"globalKeywords":["string"],"omittedNoiseSummary":["string"]}}\n\n${chunkSummaries.join('\n\n')}`,
-      3500,
+      5000,
+      'kalendulu_study_summary',
+      summaryJsonSchema,
     );
     if (!rawSummary) {
       fallbackUsed = true;
@@ -213,6 +360,19 @@ export async function buildCorpusSummary(input: {
     createdAt: now,
     updatedAt: now,
   };
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.projectId,
+    userId: input.userId,
+    stage: 'summarization_success',
+    status: fallbackUsed ? 'warning' : 'success',
+    message: 'Finale Corpus-Zusammenfassung normalisiert.',
+    details: {
+      summaryCharacters: corpus.summaryMarkdown.length,
+      topicCount: corpus.structuredSummaryJson.topics.length,
+      warningCount: warnings.length,
+    },
+  });
 
   return {
     corpus,

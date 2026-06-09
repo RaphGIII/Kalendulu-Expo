@@ -4,16 +4,19 @@ import { extractPdfText } from './extractors/pdfExtractor';
 import { extractPlainText } from './extractors/plainTextExtractor';
 import { extractPptxText } from './extractors/pptxExtractor';
 import { sanitizeStudyText, sourceWrappedText } from './sanitizeStudyText';
+import { durationMs, logStudyStep, markStart } from './studyLogger';
 import { buildCorpusSummary } from './studyAi';
 import { generateStudyPlanFromCorpus } from './studyPlanGenerator';
 import {
   countReadyProjects,
   deleteProjectBundle,
   listProjects,
+  loadCleanedTextFromMemory,
   loadCorpus,
   loadProjectBundle,
   saveGeneratedPlan,
   saveIngestedStudy,
+  saveProcessingReport,
 } from './studyPersistence';
 import type {
   AuthUser,
@@ -121,25 +124,69 @@ async function extractStudyFile(input: {
   userId: string;
   tier: StudyV2Tier;
   ocrProvider: OcrProvider;
+  requestId: string;
 }): Promise<ExtractedStudyFile> {
   const createdAt = now();
+  const started = markStart();
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.projectId,
+    userId: input.userId,
+    stage: 'extraction_file_started',
+    status: 'start',
+    message: `Extraktion fuer ${input.fileName} gestartet.`,
+    details: { fileType: input.fileType, fileSizeBytes: input.file.size },
+  });
   const extracted = await extractByType(input.file, input.fileType);
   const warnings = [...extracted.warnings];
   let rawText = extracted.text;
   let ocrUsed = extracted.ocrUsed;
+  let estimatedOcrCostUsd = 0;
 
   if (extracted.ocrNeeded) {
+    logStudyStep({
+      requestId: input.requestId,
+      projectId: input.projectId,
+      userId: input.userId,
+      stage: 'ocr_needed',
+      status: 'warning',
+      message: `${input.fileName} braucht OCR.`,
+      details: { provider: input.ocrProvider, fileType: input.fileType },
+    });
     const ocr = await runOcrIfAvailable({
       provider: input.ocrProvider,
       tier: input.tier,
       fileName: input.fileName,
       fileType: input.fileType,
+      file: input.file,
+      mistralApiKey: input.env.MISTRAL_API_KEY,
+      hasGoogleEndpoint: Boolean(input.env.GOOGLE_DOCUMENT_AI_ENDPOINT),
+      maxOcrCostUsd: Number(input.env.OCR_MAX_COST_USD_PER_PROJECT ?? input.env.OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT ?? '0.30'),
     });
     if (ocr.text) rawText = [rawText, ocr.text].filter(Boolean).join('\n');
     ocrUsed = ocr.used;
+    estimatedOcrCostUsd = ocr.estimatedCostUsd ?? 0;
     if (ocr.warning) warnings.push(ocr.warning);
+    logStudyStep({
+      requestId: input.requestId,
+      projectId: input.projectId,
+      userId: input.userId,
+      stage: ocr.used ? 'ocr_success' : 'ocr_skipped',
+      status: ocr.used ? 'success' : 'warning',
+      message: ocr.warning ?? 'OCR abgeschlossen.',
+      details: { provider: input.ocrProvider, estimatedOcrCostUsd },
+    });
   }
 
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.projectId,
+    userId: input.userId,
+    stage: 'text_sanitization_started',
+    status: 'start',
+    message: `Textbereinigung fuer ${input.fileName} gestartet.`,
+    details: { rawTextCharacters: rawText.length },
+  });
   const sanitized = sanitizeStudyText(rawText);
   const status: StudySourceFileV2['extractionStatus'] =
     sanitized.text.length >= 20 ? (warnings.length ? 'partial' : 'done') : 'failed';
@@ -156,6 +203,22 @@ async function extractStudyFile(input: {
     warning: warnings.join('\n') || undefined,
     createdAt,
   };
+  logStudyStep({
+    requestId: input.requestId,
+    projectId: input.projectId,
+    userId: input.userId,
+    stage: warnings.length ? 'extraction_file_warning' : 'extraction_file_success',
+    status: warnings.length ? 'warning' : 'success',
+    message: `${input.fileName} mit ${sanitized.text.length} verwertbaren Zeichen verarbeitet.`,
+    details: {
+      durationMs: durationMs(started),
+      method: extracted.method,
+      rawTextCharacters: rawText.length,
+      cleanedTextCharacters: sanitized.text.length,
+      warningCount: warnings.length,
+      estimatedOcrCostUsd,
+    },
+  });
 
   return {
     sourceFile,
@@ -164,6 +227,7 @@ async function extractStudyFile(input: {
     method: extracted.method,
     ocrNeeded: extracted.ocrNeeded,
     ocrUsed,
+    estimatedOcrCostUsd,
     warnings,
     noiseStats: sanitized.stats,
   };
@@ -180,11 +244,29 @@ function updateReport(report: StudyProcessingReport, nextStep: StudyProcessingSt
 }
 
 export async function handleStudyV2Route(request: Request, env: StudyV2Env, user: AuthUser) {
+  const requestId = crypto.randomUUID();
+  const requestStarted = markStart();
   try {
     if (request.method === 'OPTIONS') return jsonResponse({ ok: true });
     const url = new URL(request.url);
     const accessToken = request.headers.get('Authorization')?.match(/^Bearer\s+(.+)$/i)?.[1];
     const authedEnv = { ...env, SUPABASE_ACCESS_TOKEN: accessToken };
+    logStudyStep({
+      requestId,
+      userId: user.id,
+      stage: 'request_received',
+      status: 'start',
+      message: `${request.method} ${url.pathname}`,
+      details: { pathname: url.pathname },
+    });
+    logStudyStep({
+      requestId,
+      userId: user.id,
+      stage: 'auth_success',
+      status: 'success',
+      message: 'Supabase-Bearer-Auth erfolgreich.',
+      details: { hasUserId: Boolean(user.id) },
+    });
 
     if (request.method === 'GET' && url.pathname === '/study-v2/projects') {
       return jsonResponse({ ok: true, projects: await listProjects(authedEnv, user), warnings: [] });
@@ -200,21 +282,79 @@ export async function handleStudyV2Route(request: Request, env: StudyV2Env, user
     }
 
     if (url.pathname === '/study-v2/ingest' && request.method === 'POST') {
-      return handleIngest(request, authedEnv, user);
+      return handleIngest(request, authedEnv, user, requestId);
+    }
+
+    if (url.pathname === '/study-v2/summarize' && request.method === 'POST') {
+      return handleSummarize(request, authedEnv, user, requestId);
     }
 
     if (url.pathname === '/study-v2/generate-plan' && request.method === 'POST') {
-      return handleGeneratePlan(request, authedEnv, user);
+      return handleGeneratePlan(request, authedEnv, user, requestId);
     }
 
     return fail('Study-V2-Endpunkt nicht gefunden.', 404);
   } catch (error: any) {
+    logStudyStep({
+      requestId,
+      userId: user.id,
+      stage: 'pipeline_error',
+      status: 'error',
+      message: error?.message ?? 'Study-V2-Anfrage fehlgeschlagen.',
+      details: { durationMs: durationMs(requestStarted) },
+    });
     return fail(error?.message ?? 'Study-V2-Anfrage fehlgeschlagen.', 500);
   }
 }
 
-async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
+async function handleSummarize(request: Request, env: StudyV2Env, user: AuthUser, requestId: string) {
   if (!user.id) return fail('Unauthorized', 401);
+  const body = (await request.json().catch(() => null)) as any;
+  const projectId = String(body?.projectId ?? '');
+  if (!projectId) return fail('projectId fehlt.', 400);
+  const cleanedText = loadCleanedTextFromMemory(projectId);
+  if (!cleanedText) return fail('Bereinigter Gesamttext konnte nicht geladen werden. Bitte Ingest erneut ausführen.', 404);
+  const sourceStats = {
+    fileCount: Number(body?.fileCount ?? 0),
+    totalBytes: Number(body?.totalBytes ?? 0),
+    sourceTypes: Array.isArray(body?.sourceTypes) ? body.sourceTypes.map(String) : [],
+    rawTextCharactersProcessed: Number(body?.rawTextCharactersProcessed ?? cleanedText.length),
+    cleanedTextCharacters: cleanedText.length,
+    summaryCharacters: 0,
+    ocrUsed: Boolean(body?.ocrUsed),
+  };
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'summarization_started',
+    status: 'start',
+    message: 'Separater Summarize-Endpunkt gestartet.',
+    details: { cleanedTextCharacters: cleanedText.length },
+  });
+  const summary = await buildCorpusSummary({
+    env,
+    requestId,
+    projectId,
+    userId: user.id,
+    title: String(body?.title ?? 'Lernprojekt'),
+    cleanedText,
+    sourceStats,
+  });
+  return jsonResponse({
+    ok: true,
+    requestId,
+    projectId,
+    corpusDocumentId: summary.corpus.id,
+    corpusDocument: summary.corpus,
+    summaryPreview: summary.corpus.summaryMarkdown.slice(0, 900),
+    warnings: summary.warnings,
+  });
+}
+
+async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, requestId: string) {
+  if (!user.id) return fail('Unauthorized', 401);
+  const ingestStarted = markStart();
   const report = reportBase();
   const form = (await request.formData()) as any;
   const files = [...form.getAll('files'), ...form.getAll('file')]
@@ -231,6 +371,24 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
   const limits = tierLimits(tier, readyProjectCount);
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   const fileTypes = files.map((file) => detectFileType(file, file.name));
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'tier_resolved',
+    status: 'success',
+    message: `Tarif ${limits.label} ermittelt.`,
+    details: { tier, readyProjectCount, maxBytes: limits.maxBytes, ocrAllowed: limits.ocrAllowed },
+  });
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'files_received',
+    status: files.length ? 'success' : 'error',
+    message: `${files.length} Dateien empfangen.`,
+    details: { fileCount: files.length, totalBytes, fileNames: files.map((file) => file.name), fileTypes },
+  });
 
   updateReport(report, step('files', 'Dateien angenommen', files.length ? 'success' : 'error', `${files.length} Dateien · ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} MB`, {
     fileNames: files.map((file) => file.name),
@@ -249,6 +407,15 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
     multipleFilesAllowed: limits.multipleFilesAllowed,
     readyProjectCount,
   }));
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'file_limit_checked',
+    status: tierAllowed ? 'success' : 'error',
+    message: tierAllowed ? 'Datei- und Projektlimit erlaubt.' : 'Datei- oder Projektlimit blockiert.',
+    details: { totalBytes, maxBytes: limits.maxBytes, canCreateProject: limits.canCreateProject },
+  });
   if (totalBytes > limits.maxBytes) return fail('Das MB-Limit fuer diesen Plan wurde ueberschritten.', 413);
   if (!limits.canCreateProject) return fail('Nach dem ersten Free-Projekt oder bei Premium mit aktivem Projekt ist ein Upgrade bzw. Loeschen des alten Projekts noetig.', 402);
 
@@ -256,6 +423,15 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
     ocrProvider,
     ocrAllowed: limits.ocrAllowed,
   }));
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'ocr_check_started',
+    status: 'start',
+    message: `OCR Provider ${ocrProvider}.`,
+    details: { ocrProvider, ocrAllowed: limits.ocrAllowed },
+  });
 
   const project: StudyProjectV2 = {
     id: projectId,
@@ -272,6 +448,15 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
   };
 
   const extracted: ExtractedStudyFile[] = [];
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'extraction_started',
+    status: 'start',
+    message: 'Dateitextextraktion gestartet.',
+    details: { fileCount: files.length },
+  });
   for (const file of files) {
     const fileType = detectFileType(file, file.name) as StudyV2FileType;
     extracted.push(await extractStudyFile({
@@ -283,6 +468,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
       userId: user.id,
       tier,
       ocrProvider,
+      requestId,
     }));
   }
 
@@ -302,6 +488,15 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
   const rawTextCharactersProcessed = extracted.reduce((sum, item) => sum + item.rawText.length, 0);
   const cleanedText = extracted.map((item) => sourceWrappedText(item.sourceFile.fileName, item.cleanedText)).filter((text) => text.length > 30).join('\n\n');
   const cleanedTextCharacters = cleanedText.length;
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'text_sanitization_success',
+    status: cleanedTextCharacters >= 40 ? 'success' : 'error',
+    message: `${cleanedTextCharacters} bereinigte Zeichen aus ${rawTextCharactersProcessed} Rohzeichen.`,
+    details: { rawTextCharacters: rawTextCharactersProcessed, cleanedTextCharacters, preview: cleanedText.slice(0, 300) },
+  });
   updateReport(report, step('sanitize', 'Textbereinigung', cleanedTextCharacters >= 40 ? 'success' : 'error', `${rawTextCharactersProcessed} -> ${cleanedTextCharacters} Zeichen`, {
     rawTextCharactersProcessed,
     cleanedTextCharacters,
@@ -312,6 +507,20 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
     preview: cleanedText.slice(0, 600),
   }));
   if (cleanedTextCharacters < 40) return fail('Aus den Dateien konnte kein verwertbarer Lerntext extrahiert werden.', 422, extractionWarnings);
+  updateReport(report, step('raw-text', 'Gesamttext speichern', 'success', 'Bereinigter Gesamttext wurde fuer die Zusammenfassung vorbereitet.', {
+    rawTextCharactersProcessed,
+    cleanedTextCharacters,
+    storage: 'temporaer im Worker und Corpus-Pipeline; Rohtext nicht im Response',
+  }));
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'raw_text_saved',
+    status: 'success',
+    message: 'Bereinigter Gesamttext ist fuer Corpus-Zusammenfassung bereit; vollstaendiger Rohtext wird nicht geloggt.',
+    details: { rawTextCharacters: rawTextCharactersProcessed, cleanedTextCharacters },
+  });
 
   const sourceStats = {
     fileCount: extracted.length,
@@ -325,11 +534,26 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
 
   const summary = await buildCorpusSummary({
     env,
+    requestId,
     projectId,
     userId: user.id,
     title,
     cleanedText,
     sourceStats,
+  });
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'summarization_success',
+    status: summary.fallbackUsed ? 'warning' : 'success',
+    message: 'Corpus-Zusammenfassung erzeugt.',
+    details: {
+      summaryCharacters: summary.corpus.summaryMarkdown.length,
+      topicCount: summary.corpus.structuredSummaryJson.topics.length,
+      estimatedCostUsd: summary.estimatedCostUsd,
+      warningCount: summary.warnings.length,
+    },
   });
   updateReport(report, step('summary', 'Corpus-Zusammenfassung', summary.fallbackUsed ? 'warning' : 'success', `Zusammenfassung mit ${summary.corpus.summaryMarkdown.length} Zeichen erstellt.`, {
     chunksProcessed: summary.chunkCount,
@@ -343,11 +567,26 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
     project,
     sourceFiles: extracted.map((item) => item.sourceFile),
     corpus: summary.corpus,
+    cleanedText,
+  });
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'corpus_saved',
+    status: persisted.persisted ? 'success' : 'warning',
+    message: persisted.persisted ? 'CorpusDocument in Supabase gespeichert.' : persisted.warning ?? 'Persistenz-Fallback genutzt.',
+    details: { corpusDocumentId: summary.corpus.id, persisted: persisted.persisted },
   });
   updateReport(report, step('persistence', 'Speicherung in Datenbank', persisted.persisted ? 'success' : 'warning', persisted.persisted ? 'StudyProject, SourceFiles und CorpusDocument gespeichert.' : persisted.warning, {
     projectId,
     corpusDocumentId: summary.corpus.id,
     persisted: persisted.persisted,
+  }));
+  updateReport(report, step('corpus-save', 'CorpusDocument speichern', persisted.persisted ? 'success' : 'warning', persisted.persisted ? 'StudyCorpusDocument gespeichert.' : persisted.warning, {
+    corpusDocumentId: summary.corpus.id,
+    summaryCharacters: summary.corpus.summaryMarkdown.length,
+    topicCount: summary.corpus.structuredSummaryJson.topics.length,
   }));
 
   report.projectId = projectId;
@@ -368,13 +607,26 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
   report.costStats = {
     estimatedSummaryCostUsd: summary.estimatedCostUsd,
     estimatedPlanCostUsd: 0,
-    maxCostUsd: Number(env.OPENAI_STUDY_MAX_COST_USD_PER_PROJECT ?? '0.10'),
+    estimatedOcrCostUsd: extracted.reduce((sum, item) => sum + item.estimatedOcrCostUsd, 0),
+    maxAiCostUsd: Number(env.OPENAI_STUDY_MAX_COST_USD_PER_PROJECT ?? '0.10'),
+    maxOcrCostUsd: Number(env.OCR_MAX_COST_USD_PER_PROJECT ?? env.OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT ?? '0.60'),
     budgetExceeded: summary.warnings.some((warning) => warning.includes('Kostenlimit')),
   };
 
   const warnings = [...extractionWarnings, ...summary.warnings, ...(persisted.warning ? [persisted.warning] : [])];
+  await saveProcessingReport(env, report);
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'response_sent',
+    status: report.status === 'error' ? 'error' : report.status === 'warning' ? 'warning' : 'success',
+    message: 'Ingest-Response wird an die App gesendet.',
+    details: { durationMs: durationMs(ingestStarted), warningCount: warnings.length, corpusDocumentId: summary.corpus.id },
+  });
   return jsonResponse({
     ok: true,
+    requestId,
     projectId,
     corpusDocumentId: summary.corpus.id,
     corpusDocument: summary.corpus,
@@ -385,14 +637,25 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser) {
   });
 }
 
-async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthUser) {
+async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthUser, requestId: string) {
   if (!user.id) return fail('Unauthorized', 401);
+  const planStarted = markStart();
   const body = (await request.json().catch(() => null)) as any;
   if (!body) return fail('Ungueltiger JSON-Body.', 400);
   const projectId = String(body.projectId ?? '');
   const corpusDocumentId = String(body.corpusDocumentId ?? '');
-  const corpus = body.corpusDocument ?? await loadCorpus(env, user, corpusDocumentId);
+  const persistedCorpus = await loadCorpus(env, user, corpusDocumentId).catch(() => null);
+  const corpus = persistedCorpus ?? body.corpusDocument;
   if (!projectId || !corpusDocumentId || !corpus) return fail('StudyCorpusDocument konnte nicht geladen werden.', 404);
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'corpus_loaded',
+    status: 'success',
+    message: persistedCorpus ? 'StudyCorpusDocument aus Supabase geladen.' : 'StudyCorpusDocument aus Request-Fallback geladen.',
+    details: { corpusDocumentId, persistedCorpus: Boolean(persistedCorpus), summaryCharacters: corpus.summaryMarkdown?.length ?? 0 },
+  });
 
   const report = reportBase();
   report.projectId = projectId;
@@ -404,6 +667,7 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
 
   const plan = await generateStudyPlanFromCorpus({
     env,
+    requestId,
     corpus,
     examDate: String(body.examDate ?? corpus.project?.examDate ?? '').trim() || undefined,
     weeklyHours: Number(body.weeklyHours ?? 8),
@@ -417,6 +681,20 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
     units: plan.units,
     days: plan.days,
   });
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'plan_saved',
+    status: persisted.persisted ? 'success' : 'warning',
+    message: persisted.persisted ? 'LearningUnits, StudyDays und Slots gespeichert.' : persisted.warning ?? 'Plan-Persistenz-Fallback genutzt.',
+    details: {
+      unitCount: plan.units.length,
+      dayCount: plan.days.length,
+      slotCount: plan.days.reduce((sum, day) => sum + day.slots.length + day.reviewSlots.length, 0),
+      persisted: persisted.persisted,
+    },
+  });
 
   updateReport(report, step('plan-ai', 'Lernplan-Erzeugung', plan.fallbackUsed ? 'warning' : 'success', `${plan.units.length} Lerneinheiten, ${plan.days.length} Lerntage erzeugt.`, {
     units: plan.units.length,
@@ -424,6 +702,14 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
     reviewSlots: plan.days.reduce((sum, day) => sum + day.reviewSlots.length, 0),
     estimatedPlanCostUsd: plan.estimatedCostUsd,
     fallbackUsed: plan.fallbackUsed,
+  }));
+  updateReport(report, step('units', 'Lerneinheiten erzeugen', plan.units.length ? 'success' : 'error', `${plan.units.length} Lerneinheiten erzeugt.`, {
+    unitCount: plan.units.length,
+    headings: plan.units.slice(0, 12).map((unit) => unit.heading),
+  }));
+  updateReport(report, step('days', 'Lerntage erzeugen', plan.days.length ? 'success' : 'error', `${plan.days.length} Lerntage erzeugt.`, {
+    dayCount: plan.days.length,
+    slotCount: plan.days.reduce((sum, day) => sum + day.slots.length + day.reviewSlots.length, 0),
   }));
   updateReport(report, step('plan-validation', 'Validierung des Lernplans', plan.warnings.length ? 'warning' : 'success', plan.warnings.length ? plan.warnings.join('\n') : 'Plan validiert.', {
     noEmptyDays: plan.days.every((day) => day.slots.length || day.reviewSlots.length),
@@ -443,12 +729,25 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
   report.costStats = {
     estimatedSummaryCostUsd: 0,
     estimatedPlanCostUsd: plan.estimatedCostUsd,
-    maxCostUsd: Number(env.OPENAI_STUDY_MAX_COST_USD_PER_PROJECT ?? '0.10'),
+    estimatedOcrCostUsd: 0,
+    maxAiCostUsd: Number(env.OPENAI_STUDY_MAX_COST_USD_PER_PROJECT ?? '0.10'),
+    maxOcrCostUsd: Number(env.OCR_MAX_COST_USD_PER_PROJECT ?? env.OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT ?? '0.60'),
     budgetExceeded: plan.warnings.some((warning) => warning.includes('Kostenlimit')),
   };
+  await saveProcessingReport(env, report);
+  logStudyStep({
+    requestId,
+    projectId,
+    userId: user.id,
+    stage: 'response_sent',
+    status: report.status === 'error' ? 'error' : report.status === 'warning' ? 'warning' : 'success',
+    message: 'Generate-Plan-Response wird an die App gesendet.',
+    details: { durationMs: durationMs(planStarted), warningCount: plan.warnings.length },
+  });
 
   return jsonResponse({
     ok: true,
+    requestId,
     projectId,
     units: plan.units,
     days: plan.days,

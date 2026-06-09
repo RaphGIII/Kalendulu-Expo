@@ -74,12 +74,25 @@ create table if not exists public.study_v2_slots (
   completed boolean not null default false
 );
 
+create table if not exists public.study_v2_processing_reports (
+  id uuid primary key,
+  project_id uuid references public.study_v2_projects(id) on delete cascade,
+  corpus_document_id uuid references public.study_v2_corpus_documents(id) on delete cascade,
+  status text not null check (status in ('running', 'success', 'warning', 'error')),
+  report_json jsonb not null,
+  source_stats jsonb,
+  cost_stats jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.study_v2_projects enable row level security;
 alter table public.study_v2_source_files enable row level security;
 alter table public.study_v2_corpus_documents enable row level security;
 alter table public.study_v2_learning_units enable row level security;
 alter table public.study_v2_days enable row level security;
 alter table public.study_v2_slots enable row level security;
+alter table public.study_v2_processing_reports enable row level security;
 
 drop policy if exists "Users manage own study v2 projects" on public.study_v2_projects;
 create policy "Users manage own study v2 projects" on public.study_v2_projects
@@ -100,5 +113,9 @@ create policy "Users read own study v2 days" on public.study_v2_days
   with check (project_id in (select id from public.study_v2_projects where user_id = auth.uid()));
 drop policy if exists "Users read own study v2 slots" on public.study_v2_slots;
 create policy "Users read own study v2 slots" on public.study_v2_slots
+  for all using (project_id in (select id from public.study_v2_projects where user_id = auth.uid()))
+  with check (project_id in (select id from public.study_v2_projects where user_id = auth.uid()));
+drop policy if exists "Users read own study v2 reports" on public.study_v2_processing_reports;
+create policy "Users read own study v2 reports" on public.study_v2_processing_reports
   for all using (project_id in (select id from public.study_v2_projects where user_id = auth.uid()))
   with check (project_id in (select id from public.study_v2_projects where user_id = auth.uid()));

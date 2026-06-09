@@ -1,7 +1,7 @@
 export type StudyV2Tier = 'free' | 'premium' | 'plus';
 export type StudyV2TargetLevel = 'pass' | 'good' | 'excellent';
 export type StudyV2FileType = 'pdf' | 'docx' | 'pptx' | 'txt' | 'md';
-export type OcrProvider = 'none' | 'openai_vision' | 'external';
+export type OcrProvider = 'none' | 'mistral_ocr' | 'google_document_ai' | 'google_vision';
 export type ProcessingStatus = 'pending' | 'running' | 'success' | 'warning' | 'error';
 
 export type StudyV2Env = {
@@ -15,6 +15,10 @@ export type StudyV2Env = {
   OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT?: string;
   OCR_PROVIDER?: OcrProvider;
   OCR_ENDPOINT_URL?: string;
+  OCR_MAX_COST_USD_PER_PROJECT?: string;
+  MISTRAL_API_KEY?: string;
+  GOOGLE_DOCUMENT_AI_ENDPOINT?: string;
+  GOOGLE_APPLICATION_CREDENTIALS?: string;
 };
 
 export type AuthUser = {
@@ -148,7 +152,9 @@ export type StudyProcessingReport = {
   costStats?: {
     estimatedSummaryCostUsd: number;
     estimatedPlanCostUsd: number;
-    maxCostUsd: number;
+    estimatedOcrCostUsd: number;
+    maxAiCostUsd: number;
+    maxOcrCostUsd: number;
     budgetExceeded: boolean;
   };
   createdAt: string;
@@ -162,6 +168,7 @@ export type ExtractedStudyFile = {
   method: string;
   ocrNeeded: boolean;
   ocrUsed: boolean;
+  estimatedOcrCostUsd: number;
   warnings: string[];
   noiseStats: Record<string, number>;
 };

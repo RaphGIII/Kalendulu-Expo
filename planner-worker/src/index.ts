@@ -27,8 +27,12 @@ export interface Env {
   OPENAI_STUDY_PLAN_MODEL?: string;
   OPENAI_STUDY_MAX_COST_USD_PER_PROJECT?: string;
   OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT?: string;
-  OCR_PROVIDER?: 'none' | 'openai_vision' | 'external';
+  OCR_PROVIDER?: 'none' | 'mistral_ocr' | 'google_document_ai' | 'google_vision';
   OCR_ENDPOINT_URL?: string;
+  OCR_MAX_COST_USD_PER_PROJECT?: string;
+  MISTRAL_API_KEY?: string;
+  GOOGLE_DOCUMENT_AI_ENDPOINT?: string;
+  GOOGLE_APPLICATION_CREDENTIALS?: string;
 }
 
 type GoalQuestion = {

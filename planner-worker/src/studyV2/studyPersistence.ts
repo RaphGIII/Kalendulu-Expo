@@ -5,6 +5,7 @@ import type {
   StudyLearningSlotV2,
   StudyLearningUnitV2,
   StudyProjectV2,
+  StudyProcessingReport,
   StudySourceFileV2,
   StudyV2Env,
 } from './types';
@@ -15,6 +16,7 @@ type PersistState = {
   corpus: Map<string, StudyCorpusDocumentV2>;
   units: Map<string, StudyLearningUnitV2[]>;
   days: Map<string, StudyDayV2[]>;
+  cleanedText: Map<string, string>;
 };
 
 const memory: PersistState = {
@@ -23,6 +25,7 @@ const memory: PersistState = {
   corpus: new Map(),
   units: new Map(),
   days: new Map(),
+  cleanedText: new Map(),
 };
 
 function hasSupabase(env: StudyV2Env) {
@@ -156,10 +159,12 @@ export async function saveIngestedStudy(input: {
   project: StudyProjectV2;
   sourceFiles: StudySourceFileV2[];
   corpus: StudyCorpusDocumentV2;
+  cleanedText?: string;
 }) {
   memory.projects.set(input.project.id, input.project);
   memory.sourceFiles.set(input.project.id, input.sourceFiles);
   memory.corpus.set(input.corpus.id, input.corpus);
+  if (input.cleanedText) memory.cleanedText.set(input.project.id, input.cleanedText);
 
   try {
     await supabaseRequest(input.env, 'study_v2_projects', { method: 'POST', body: JSON.stringify(dbProject(input.project)) });
@@ -172,6 +177,35 @@ export async function saveIngestedStudy(input: {
     return {
       persisted: false,
       warning: `Lokal gespeichert, Datenbank nicht verfuegbar. ${String(error?.message ?? '').slice(0, 120)}`,
+    };
+  }
+}
+
+export function loadCleanedTextFromMemory(projectId: string) {
+  return memory.cleanedText.get(projectId) ?? '';
+}
+
+export async function saveProcessingReport(env: StudyV2Env, report: StudyProcessingReport) {
+  try {
+    await supabaseRequest(env, 'study_v2_processing_reports', {
+      method: 'POST',
+      body: JSON.stringify({
+        id: crypto.randomUUID(),
+        project_id: report.projectId ?? null,
+        corpus_document_id: report.corpusDocumentId ?? null,
+        status: report.status,
+        report_json: report,
+        source_stats: report.sourceStats ?? null,
+        cost_stats: report.costStats ?? null,
+        created_at: report.createdAt,
+        updated_at: report.updatedAt,
+      }),
+    });
+    return { persisted: true, warning: undefined };
+  } catch (error: any) {
+    return {
+      persisted: false,
+      warning: `ProcessingReport nicht in Supabase gespeichert. ${String(error?.message ?? '').slice(0, 120)}`,
     };
   }
 }

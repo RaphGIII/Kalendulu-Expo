@@ -61,6 +61,7 @@ import {
   generateStudyV2Plan,
   ingestStudyV2,
   redactProcessingReport,
+  summarizeStudyV2,
   type StudyProcessingReport,
   type StudyProcessingStep,
   type StudyV2Tier,
@@ -95,6 +96,10 @@ dayjs.locale('de');
 const FORCE_PREMIUM_FOR_LOCAL_TESTING = true;
 const FORCE_PLUS_FOR_LOCAL_TESTING = true;
 const SHOW_STUDY_PROCESSING_DEBUG = true;
+
+function logStudyClientStep(stage: string, details?: Record<string, unknown>) {
+  console.log('[StudyV2]', stage, details ?? {});
+}
 
 
 function minutesLabel(minutes: number) {
@@ -482,6 +487,11 @@ export default function StudyScreen() {
     });
 
     if (result.canceled || !result.assets?.length) return;
+    logStudyClientStep('files_selected', {
+      fileCount: result.assets.length,
+      totalBytes: result.assets.reduce((sum, asset) => sum + (asset.size ?? 0), 0),
+      fileNames: result.assets.map((asset) => asset.name),
+    });
 
     const usage = await loadStudyUsage();
     const newFiles: TemporaryStudyAsset[] = [];
@@ -562,6 +572,11 @@ export default function StudyScreen() {
       scrollRef.current?.scrollTo({ y: 0, animated: true });
       if (files.length) {
         setMode('processing');
+        logStudyClientStep('upload_started', {
+          fileCount: files.length,
+          totalBytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
+          tier: activeStudyV2Tier,
+        });
         const startedAt = new Date().toISOString();
         setProcessingReport({
           status: 'running',
@@ -583,7 +598,8 @@ export default function StudyScreen() {
           ],
         });
         await advanceAnalysisProgress(18);
-        const ingest = await ingestStudyV2({
+        logStudyClientStep('worker_ingest_started', { fileCount: files.length, title: cleanTitle });
+        let ingest = await ingestStudyV2({
           files,
           title: cleanTitle,
           examDate: examDate.trim() || undefined,
@@ -592,8 +608,21 @@ export default function StudyScreen() {
           minutesPerLearningDay,
           tier: activeStudyV2Tier,
         });
+        if (!ingest.corpusDocumentId) {
+          logStudyClientStep('summarize_started', { projectId: ingest.projectId });
+          ingest = await summarizeStudyV2({ projectId: ingest.projectId, title: cleanTitle });
+          logStudyClientStep('summarize_response_received', { corpusDocumentId: ingest.corpusDocumentId });
+        }
+        logStudyClientStep('worker_ingest_response_received', {
+          requestId: (ingest as any).requestId,
+          projectId: ingest.projectId,
+          corpusDocumentId: ingest.corpusDocumentId,
+          warningCount: ingest.warnings.length,
+        });
+        logStudyClientStep('corpus_document_id_received', { corpusDocumentId: ingest.corpusDocumentId });
         setProcessingReport(ingest.processingReport);
         await advanceAnalysisProgress(58);
+        logStudyClientStep('generate_plan_started', { projectId: ingest.projectId, corpusDocumentId: ingest.corpusDocumentId });
         const generated = await generateStudyV2Plan({
           projectId: ingest.projectId,
           corpusDocumentId: ingest.corpusDocumentId,
@@ -602,6 +631,12 @@ export default function StudyScreen() {
           targetLevel,
           weeklyHours: Math.max(1, Number(weeklyHours) || 8),
           minutesPerLearningDay,
+        });
+        logStudyClientStep('generate_plan_response_received', {
+          requestId: (generated as any).requestId,
+          unitCount: generated.units.length,
+          dayCount: generated.days.length,
+          warningCount: generated.warnings.length,
         });
         const mergedReport: StudyProcessingReport = {
           ...generated.processingReport,
@@ -616,7 +651,9 @@ export default function StudyScreen() {
           costStats: {
             estimatedSummaryCostUsd: ingest.processingReport.costStats?.estimatedSummaryCostUsd ?? 0,
             estimatedPlanCostUsd: generated.processingReport.costStats?.estimatedPlanCostUsd ?? 0,
-            maxCostUsd: generated.processingReport.costStats?.maxCostUsd ?? 0.1,
+            estimatedOcrCostUsd: ingest.processingReport.costStats?.estimatedOcrCostUsd ?? 0,
+            maxAiCostUsd: generated.processingReport.costStats?.maxAiCostUsd ?? 0.1,
+            maxOcrCostUsd: ingest.processingReport.costStats?.maxOcrCostUsd ?? 0.6,
             budgetExceeded: Boolean(ingest.processingReport.costStats?.budgetExceeded || generated.processingReport.costStats?.budgetExceeded),
           },
           updatedAt: new Date().toISOString(),
@@ -635,6 +672,11 @@ export default function StudyScreen() {
           recommendation: generated.recommendation,
           warnings: [...ingest.warnings, ...generated.warnings],
         }));
+        logStudyClientStep('plan_set_in_ui', {
+          projectId: generated.projectId,
+          unitCount: generated.units.length,
+          dayCount: generated.days.length,
+        });
         setUploadMessages((prev) => [
           ...prev,
           `${ingest.sourceStats?.fileCount ?? files.length} Dateien verarbeitet.`,
@@ -667,6 +709,10 @@ export default function StudyScreen() {
       await advanceAnalysisProgress(100);
       setTimeout(() => scrollRef.current?.scrollTo({ y: 0, animated: false }), 80);
     } catch (error: any) {
+      logStudyClientStep('pipeline_error', {
+        stage: files.length ? 'study_v2_file_pipeline' : 'manual_compile',
+        message: error?.message ?? 'Unbekannter Fehler',
+      });
       const at = new Date().toISOString();
       setProcessingReport((current) => ({
         status: 'error',

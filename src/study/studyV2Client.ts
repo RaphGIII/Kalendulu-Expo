@@ -36,7 +36,9 @@ export type StudyProcessingReport = {
   costStats?: {
     estimatedSummaryCostUsd: number;
     estimatedPlanCostUsd: number;
-    maxCostUsd: number;
+    estimatedOcrCostUsd: number;
+    maxAiCostUsd: number;
+    maxOcrCostUsd: number;
     budgetExceeded: boolean;
   };
   createdAt: string;
@@ -199,6 +201,23 @@ export async function generateStudyV2Plan(input: {
     throw new Error(data?.error ?? 'Study-V2-Planerzeugung fehlgeschlagen.');
   }
   return data as StudyV2PlanResult;
+}
+
+export async function summarizeStudyV2(input: {
+  projectId: string;
+  title: string;
+}) {
+  const auth = await buildAuthenticatedJsonHeaders();
+  const res = await fetch(`${assertApiUrl()}/study-v2/summarize`, {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify(input),
+  });
+  const data = await readJsonResponse(res);
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error ?? 'Study-V2-Zusammenfassung fehlgeschlagen.');
+  }
+  return data as StudyV2IngestResult;
 }
 
 export function redactProcessingReport(report: StudyProcessingReport | null) {
