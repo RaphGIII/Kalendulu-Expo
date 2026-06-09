@@ -14,6 +14,7 @@ export interface Env {
   OPENAI_API_KEY: string;
   SUPABASE_URL: string;
   SUPABASE_PUBLISHABLE_KEY: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   OPENAI_MODEL_CHEAP?: string;
   OPENAI_MODEL_BALANCED?: string;
   OPENAI_MODEL_STRONG?: string;
@@ -33,6 +34,11 @@ export interface Env {
   MISTRAL_API_KEY?: string;
   GOOGLE_DOCUMENT_AI_ENDPOINT?: string;
   GOOGLE_APPLICATION_CREDENTIALS?: string;
+  OPENAI_GPT5_NANO_INPUT_USD_PER_1M?: string;
+  OPENAI_GPT5_NANO_CACHED_INPUT_USD_PER_1M?: string;
+  OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M?: string;
+  MISTRAL_OCR_USD_PER_1000_PAGES?: string;
+  API_COST_USD_TO_EUR_RATE?: string;
 }
 
 type GoalQuestion = {

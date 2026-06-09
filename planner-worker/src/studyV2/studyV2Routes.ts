@@ -5,8 +5,15 @@ import { extractPlainText } from './extractors/plainTextExtractor';
 import { extractPptxText } from './extractors/pptxExtractor';
 import { sanitizeStudyText, sourceWrappedText } from './sanitizeStudyText';
 import { durationMs, logStudyStep, markStart } from './studyLogger';
-import { buildCorpusSummary } from './studyAi';
+import { buildCorpusSummary, estimatedCost } from './studyAi';
 import { generateStudyPlanFromCorpus } from './studyPlanGenerator';
+import { getApiPricing } from '../shared/apiPricing';
+import {
+  assertStudyUsageAllowed,
+  consumeAiCredits,
+  recordApiCostEvent,
+} from './costTracking';
+import { getStudyPlanLimit, normalizeStudyBillingPlan } from './studyPlanLimits';
 import {
   countReadyProjects,
   deleteProjectBundle,
@@ -48,6 +55,17 @@ function fail(error: string, status = 400, warnings: string[] = []) {
   return jsonResponse({ ok: false, error, warnings }, status);
 }
 
+function limitFail(result: Extract<Awaited<ReturnType<typeof assertStudyUsageAllowed>>, { allowed: false }>) {
+  return jsonResponse({
+    ok: false,
+    code: result.code,
+    error: result.message,
+    message: result.message,
+    upgradeOptions: result.upgradeOptions,
+    reasons: result.reasons,
+  }, 402);
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -68,8 +86,7 @@ function detectFileType(file: File, fileName: string): StudyV2FileType | null {
 }
 
 function safeTier(value: FormDataEntryValue | null): StudyV2Tier {
-  const tier = String(value ?? 'free');
-  return tier === 'plus' || tier === 'premium' ? tier : 'free';
+  return normalizeStudyBillingPlan(value);
 }
 
 function safeTargetLevel(value: unknown): StudyV2TargetLevel {
@@ -77,34 +94,52 @@ function safeTargetLevel(value: unknown): StudyV2TargetLevel {
   return level === 'pass' || level === 'excellent' ? level : 'good';
 }
 
+function inputProviderName(provider: OcrProvider) {
+  if (provider === 'mistral_ocr') return 'mistral';
+  if (provider === 'google_document_ai' || provider === 'google_vision') return 'google';
+  return 'local';
+}
+
 function tierLimits(tier: StudyV2Tier, readyProjectCount: number) {
-  if (tier === 'plus') {
-    return {
-      label: 'Plus',
-      maxBytes: 500 * 1024 * 1024,
-      ocrAllowed: true,
-      multipleFilesAllowed: true,
-      canCreateProject: true,
-      activeProjectLimit: 999,
-    };
-  }
-  if (tier === 'premium') {
-    return {
-      label: 'Premium',
-      maxBytes: 250 * 1024 * 1024,
-      ocrAllowed: true,
-      multipleFilesAllowed: true,
-      canCreateProject: readyProjectCount < 1,
-      activeProjectLimit: 1,
-    };
-  }
+  const limit = getStudyPlanLimit(tier);
   return {
-    label: readyProjectCount > 0 ? 'Free Upgrade erforderlich' : 'Free First Use',
-    maxBytes: 100 * 1024 * 1024,
-    ocrAllowed: false,
+    label: limit.label,
+    maxBytes: Number.MAX_SAFE_INTEGER,
+    ocrAllowed: limit.ocrAllowed,
     multipleFilesAllowed: true,
-    canCreateProject: readyProjectCount < 1,
-    activeProjectLimit: 1,
+    canCreateProject: tier === 'free_demo' ? readyProjectCount < 1 : readyProjectCount < limit.activeProjectLimit,
+    activeProjectLimit: limit.activeProjectLimit,
+    pageLimit: limit.freeSamplePages ?? limit.pagesPerMonth,
+  };
+}
+
+function applyStudySampleLimit(extracted: Awaited<ReturnType<typeof extractByType>>, tier: StudyV2Tier, fileType: StudyV2FileType) {
+  const limit = getStudyPlanLimit(tier);
+  if (tier !== 'free_demo') return { extracted, pagesProcessed: undefined, demoLimited: false };
+  const samplePages = limit.freeSamplePages ?? 20;
+  const approxChars = samplePages * 2600;
+  const lines = extracted.text.split('\n');
+  let pageMarkers = 0;
+  const sampledLines: string[] = [];
+  for (const line of lines) {
+    if (/^(folie|seite)\s+\d+/i.test(line.trim())) pageMarkers += 1;
+    if (pageMarkers > samplePages) break;
+    sampledLines.push(line);
+  }
+  const sampledText = fileType === 'txt' || fileType === 'md' || fileType === 'docx'
+    ? extracted.text.slice(0, approxChars)
+    : sampledLines.join('\n').slice(0, approxChars * 2);
+  return {
+    extracted: {
+      ...extracted,
+      text: sampledText,
+      warnings: [
+        ...extracted.warnings,
+        'Demo-Modus: Es wurden nur die ersten 20 Seiten verarbeitet. Upgrade verarbeitet das gesamte Dokument.',
+      ],
+    },
+    pagesProcessed: samplePages,
+    demoLimited: true,
   };
 }
 
@@ -137,13 +172,27 @@ async function extractStudyFile(input: {
     message: `Extraktion fuer ${input.fileName} gestartet.`,
     details: { fileType: input.fileType, fileSizeBytes: input.file.size },
   });
-  const extracted = await extractByType(input.file, input.fileType);
+  const extractedFull = await extractByType(input.file, input.fileType);
+  const sampled = applyStudySampleLimit(extractedFull, input.tier, input.fileType);
+  const extracted = sampled.extracted;
   const warnings = [...extracted.warnings];
   let rawText = extracted.text;
   let ocrUsed = extracted.ocrUsed;
   let estimatedOcrCostUsd = 0;
+  let pagesProcessed = sampled.pagesProcessed ?? 0;
 
-  if (extracted.ocrNeeded) {
+  if (extracted.ocrNeeded && input.tier === 'free_demo') {
+    warnings.push('Demo-Modus: OCR fuer gescannte Inhalte wurde nicht auf das gesamte Dokument angewendet. Upgrade verarbeitet das vollstaendige Dokument mit OCR.');
+    logStudyStep({
+      requestId: input.requestId,
+      projectId: input.projectId,
+      userId: input.userId,
+      stage: 'ocr_skipped',
+      status: 'warning',
+      message: 'Free-Demo-OCR wurde aus Kostenschutz nicht auf das Volldokument angewendet.',
+      details: { provider: input.ocrProvider, fileType: input.fileType, reason: 'free_demo_full_document_ocr_guard' },
+    });
+  } else if (extracted.ocrNeeded) {
     logStudyStep({
       requestId: input.requestId,
       projectId: input.projectId,
@@ -166,6 +215,7 @@ async function extractStudyFile(input: {
     if (ocr.text) rawText = [rawText, ocr.text].filter(Boolean).join('\n');
     ocrUsed = ocr.used;
     estimatedOcrCostUsd = ocr.estimatedCostUsd ?? 0;
+    pagesProcessed = ocr.pagesProcessed ?? pagesProcessed;
     if (ocr.warning) warnings.push(ocr.warning);
     logStudyStep({
       requestId: input.requestId,
@@ -174,7 +224,7 @@ async function extractStudyFile(input: {
       stage: ocr.used ? 'ocr_success' : 'ocr_skipped',
       status: ocr.used ? 'success' : 'warning',
       message: ocr.warning ?? 'OCR abgeschlossen.',
-      details: { provider: input.ocrProvider, estimatedOcrCostUsd },
+      details: { provider: input.ocrProvider, estimatedOcrCostUsd, pagesProcessed },
     });
   }
 
@@ -228,6 +278,7 @@ async function extractStudyFile(input: {
     ocrNeeded: extracted.ocrNeeded,
     ocrUsed,
     estimatedOcrCostUsd,
+    pagesProcessed,
     warnings,
     noiseStats: sanitized.stats,
   };
@@ -369,6 +420,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   const ocrProvider = (env.OCR_PROVIDER || 'none') as OcrProvider;
   const readyProjectCount = await countReadyProjects(env, user);
   const limits = tierLimits(tier, readyProjectCount);
+  const planLimit = getStudyPlanLimit(tier);
   const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
   const fileTypes = files.map((file) => detectFileType(file, file.name));
   logStudyStep({
@@ -398,6 +450,16 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   }));
   if (!files.length) return fail('Bitte mindestens eine Datei hochladen.', 400, [],);
   if (fileTypes.some((item) => !item)) return fail('Mindestens ein Dateityp wird nicht unterstuetzt.', 400);
+
+  const usageGate = await assertStudyUsageAllowed({
+    env,
+    user,
+    plan: tier,
+    estimatedNextCostEur: tier === 'free_demo' ? 0.01 : 0.03,
+    estimatedNextPages: limits.pageLimit,
+    projectCreation: true,
+  });
+  if (!usageGate.allowed) return limitFail(usageGate);
 
   const tierAllowed = totalBytes <= limits.maxBytes && limits.canCreateProject;
   updateReport(report, step('tier', 'Tarifpruefung', tierAllowed ? 'success' : 'error', limits.label, {
@@ -473,6 +535,33 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   }
 
   const extractionWarnings = extracted.flatMap((item) => item.warnings.map((warning) => `${item.sourceFile.fileName}: ${warning}`));
+  const ocrCostUsd = extracted.reduce((sum, item) => sum + item.estimatedOcrCostUsd, 0);
+  const ocrPagesProcessed = extracted.reduce((sum, item) => sum + (item.pagesProcessed ?? 0), 0);
+  if (ocrCostUsd > 0 || ocrPagesProcessed > 0) {
+    const credit = await consumeAiCredits(env, user, Math.max(0, ocrCostUsd - (usageGate.usage.extraCreditRemainingEur ? 0 : planLimit.monthlyApiBudgetEur)));
+    const costEvent = await recordApiCostEvent({
+      env,
+      user,
+      userPlanSnapshot: tier,
+      projectId,
+      projectTitle: title,
+      requestId,
+      feature: 'study_v2',
+      stage: 'ocr',
+      provider: inputProviderName(ocrProvider),
+      apiKeyAlias: ocrProvider === 'mistral_ocr' ? 'mistral_ocr_key' : undefined,
+      model: ocrProvider === 'mistral_ocr' ? 'mistral-ocr-latest' : undefined,
+      operation: 'ocr',
+      pagesProcessed: ocrPagesProcessed,
+      fileCount: extracted.length,
+      totalFileBytes: totalBytes,
+      unitPricePerPage: 0.002,
+      computedCostUsd: ocrCostUsd,
+      creditUsedUsd: credit.consumedUsd,
+      metadata: { ocrProvider, demoLimited: tier === 'free_demo' },
+    });
+    if (costEvent.warning) extractionWarnings.push(costEvent.warning);
+  }
   updateReport(report, step('extraction', 'Textextraktion', extractionWarnings.length ? 'warning' : 'success', `${extracted.length} Dateien verarbeitet.`, {
     files: extracted.map((item) => ({
       fileName: item.sourceFile.fileName,
@@ -532,6 +621,15 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     ocrUsed: extracted.some((item) => item.ocrUsed),
   };
 
+  const summaryEstimatedUsd = estimatedCost(cleanedText.length, Math.min(14000, cleanedText.length / 3));
+  const summaryGate = await assertStudyUsageAllowed({
+    env,
+    user,
+    plan: tier,
+    estimatedNextCostEur: summaryEstimatedUsd,
+  });
+  if (!summaryGate.allowed) return limitFail(summaryGate);
+
   const summary = await buildCorpusSummary({
     env,
     requestId,
@@ -541,6 +639,35 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     cleanedText,
     sourceStats,
   });
+  const pricing = getApiPricing(env);
+  const summaryCredit = await consumeAiCredits(env, user, Math.max(0, summary.estimatedCostUsd - Math.max(0, planLimit.monthlyApiBudgetEur - summaryGate.usage.computedCostEur)));
+  const summaryCostEvent = await recordApiCostEvent({
+    env,
+    user,
+    userPlanSnapshot: tier,
+    projectId,
+    projectTitle: title,
+    requestId,
+    feature: 'study_v2',
+    stage: 'summary',
+    provider: 'openai',
+    apiKeyAlias: 'openai_main_key',
+    providerRequestId: summary.providerRequestId,
+    model: summary.model,
+    operation: 'summary',
+    inputTokens: summary.inputTokens,
+    outputTokens: summary.outputTokens,
+    cachedInputTokens: summary.cachedInputTokens,
+    fileCount: extracted.length,
+    totalFileBytes: totalBytes,
+    unitPriceInputPer1M: pricing.openAiGpt5Nano.inputUsdPer1M,
+    unitPriceOutputPer1M: pricing.openAiGpt5Nano.outputUsdPer1M,
+    unitPriceCachedInputPer1M: pricing.openAiGpt5Nano.cachedInputUsdPer1M,
+    computedCostUsd: summary.estimatedCostUsd,
+    creditUsedUsd: summaryCredit.consumedUsd,
+    metadata: { chunkCount: summary.chunkCount, fallbackUsed: summary.fallbackUsed },
+  });
+  if (summaryCostEvent.warning) summary.warnings.push(summaryCostEvent.warning);
   logStudyStep({
     requestId,
     projectId,
@@ -665,6 +792,17 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
     summaryCharacters: corpus.summaryMarkdown?.length ?? 0,
   }));
 
+  const planTier = normalizeStudyBillingPlan(corpus.project?.tierSnapshot ?? body.tier ?? 'free_demo');
+  const planLimit = getStudyPlanLimit(planTier);
+  const planEstimatedUsd = estimatedCost(corpus.summaryMarkdown?.length ?? 0, Math.min(12000, corpus.summaryMarkdown?.length ?? 0));
+  const planGate = await assertStudyUsageAllowed({
+    env,
+    user,
+    plan: planTier,
+    estimatedNextCostEur: planEstimatedUsd,
+  });
+  if (!planGate.allowed) return limitFail(planGate);
+
   const plan = await generateStudyPlanFromCorpus({
     env,
     requestId,
@@ -674,6 +812,34 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
     minutesPerLearningDay: Number(body.minutesPerLearningDay ?? 90),
     targetLevel: safeTargetLevel(body.targetLevel),
   });
+
+  const pricing = getApiPricing(env);
+  const planCredit = await consumeAiCredits(env, user, Math.max(0, plan.estimatedCostUsd - Math.max(0, planLimit.monthlyApiBudgetEur - planGate.usage.computedCostEur)));
+  const planCostEvent = await recordApiCostEvent({
+    env,
+    user,
+    userPlanSnapshot: planTier,
+    projectId,
+    projectTitle: corpus.title,
+    requestId,
+    feature: 'study_v2',
+    stage: 'plan',
+    provider: 'openai',
+    apiKeyAlias: 'openai_main_key',
+    providerRequestId: plan.providerRequestId,
+    model: plan.model,
+    operation: 'plan_generation',
+    inputTokens: plan.inputTokens,
+    outputTokens: plan.outputTokens,
+    cachedInputTokens: plan.cachedInputTokens,
+    unitPriceInputPer1M: pricing.openAiGpt5Nano.inputUsdPer1M,
+    unitPriceOutputPer1M: pricing.openAiGpt5Nano.outputUsdPer1M,
+    unitPriceCachedInputPer1M: pricing.openAiGpt5Nano.cachedInputUsdPer1M,
+    computedCostUsd: plan.estimatedCostUsd,
+    creditUsedUsd: planCredit.consumedUsd,
+    metadata: { fallbackUsed: plan.fallbackUsed, unitCount: plan.units.length, dayCount: plan.days.length },
+  });
+  if (planCostEvent.warning) plan.warnings.push(planCostEvent.warning);
 
   const persisted = await saveGeneratedPlan({
     env,

@@ -1,4 +1,4 @@
-export type StudyV2Tier = 'free' | 'premium' | 'plus';
+export type StudyV2Tier = 'free_demo' | 'starter' | 'plus' | 'premium_monthly' | 'premium_yearly';
 export type StudyV2TargetLevel = 'pass' | 'good' | 'excellent';
 export type StudyV2FileType = 'pdf' | 'docx' | 'pptx' | 'txt' | 'md';
 export type OcrProvider = 'none' | 'mistral_ocr' | 'google_document_ai' | 'google_vision';
@@ -8,6 +8,7 @@ export type StudyV2Env = {
   OPENAI_API_KEY?: string;
   SUPABASE_URL?: string;
   SUPABASE_PUBLISHABLE_KEY?: string;
+  SUPABASE_SERVICE_ROLE_KEY?: string;
   SUPABASE_ACCESS_TOKEN?: string;
   OPENAI_STUDY_SUMMARY_MODEL?: string;
   OPENAI_STUDY_PLAN_MODEL?: string;
@@ -19,6 +20,11 @@ export type StudyV2Env = {
   MISTRAL_API_KEY?: string;
   GOOGLE_DOCUMENT_AI_ENDPOINT?: string;
   GOOGLE_APPLICATION_CREDENTIALS?: string;
+  OPENAI_GPT5_NANO_INPUT_USD_PER_1M?: string;
+  OPENAI_GPT5_NANO_CACHED_INPUT_USD_PER_1M?: string;
+  OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M?: string;
+  MISTRAL_OCR_USD_PER_1000_PAGES?: string;
+  API_COST_USD_TO_EUR_RATE?: string;
 };
 
 export type AuthUser = {
@@ -169,6 +175,7 @@ export type ExtractedStudyFile = {
   ocrNeeded: boolean;
   ocrUsed: boolean;
   estimatedOcrCostUsd: number;
+  pagesProcessed?: number;
   warnings: string[];
   noiseStats: Record<string, number>;
 };
@@ -179,6 +186,11 @@ export type CorpusSummaryResult = {
   fallbackUsed: boolean;
   warnings: string[];
   chunkCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  model: string;
+  providerRequestId?: string;
 };
 
 export type StudyPlanResultV2 = {
@@ -190,4 +202,9 @@ export type StudyPlanResultV2 = {
   warnings: string[];
   estimatedCostUsd: number;
   fallbackUsed: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+  model: string;
+  providerRequestId?: string;
 };

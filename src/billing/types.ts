@@ -1,4 +1,4 @@
-export type UserStudyTier = 'free' | 'student' | 'premium';
+export type UserStudyTier = 'free' | 'starter' | 'plus' | 'premium';
 
 export type SubscriptionStatus = {
   tier: UserStudyTier;

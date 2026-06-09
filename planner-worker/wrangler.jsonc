@@ -17,6 +17,11 @@
     "OPENAI_STUDY_OCR_MAX_COST_USD_PER_PROJECT": "0.25",
     "OCR_PROVIDER": "mistral_ocr",
     "OCR_MAX_COST_USD_PER_PROJECT": "0.30",
+    "OPENAI_GPT5_NANO_INPUT_USD_PER_1M": "0.05",
+    "OPENAI_GPT5_NANO_CACHED_INPUT_USD_PER_1M": "0.005",
+    "OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M": "0.40",
+    "MISTRAL_OCR_USD_PER_1000_PAGES": "2.00",
+    "API_COST_USD_TO_EUR_RATE": "1.0",
     "SUPABASE_URL": "https://poupgnhlapvgoeeqjbbe.supabase.co",
     "SUPABASE_PUBLISHABLE_KEY": "sb_publishable_m3tYbzYlg3UEwK81EvWZTw_de0W8iNy"
   }

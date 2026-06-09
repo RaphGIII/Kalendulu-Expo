@@ -1,9 +1,11 @@
 import type { OcrProvider, StudyV2Tier } from '../types';
+import { computeMistralOcrCostUsd } from '../../shared/apiPricing';
 
 type OcrResult = {
   text: string;
   used: boolean;
   estimatedCostUsd: number;
+  pagesProcessed?: number;
   warning?: string;
 };
 
@@ -107,11 +109,14 @@ async function runMistralOcr(input: {
       .filter(Boolean)
       .join('\n\n')
       .trim();
+    const pagesProcessed = Math.max(0, ocr.pages?.length ?? 0);
+    const actualCostUsd = computeMistralOcrCostUsd({}, pagesProcessed);
 
     return {
       text,
       used: text.length > 0,
-      estimatedCostUsd,
+      estimatedCostUsd: actualCostUsd || estimatedCostUsd,
+      pagesProcessed,
       warning: text ? undefined : 'Mistral OCR hat keinen verwertbaren Text zurueckgegeben.',
     };
   } catch (error: any) {
@@ -136,15 +141,6 @@ export async function runOcrIfAvailable(input: {
   hasGoogleEndpoint?: boolean;
   maxOcrCostUsd?: number;
 }): Promise<OcrResult> {
-  if (input.tier === 'free') {
-    return {
-      text: '',
-      used: false,
-      estimatedCostUsd: 0,
-      warning: 'OCR ist im Free First Use nicht enthalten.',
-    };
-  }
-
   if (input.provider === 'none') {
     return {
       text: '',

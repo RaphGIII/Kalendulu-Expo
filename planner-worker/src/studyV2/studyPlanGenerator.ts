@@ -8,6 +8,7 @@ import type {
   StudyV2TargetLevel,
 } from './types';
 import { callOpenAiJson, estimatedCost, safeHeading } from './studyAi';
+import { computeOpenAiCostUsd } from '../shared/apiPricing';
 import { logStudyStep } from './studyLogger';
 
 function clamp(value: number, min: number, max: number) {
@@ -241,6 +242,10 @@ export async function generateStudyPlanFromCorpus(input: {
   if (cost > maxCost) warnings.push('Ein Teil wurde lokal strukturiert, weil das Kostenlimit erreicht wurde.');
 
   let raw: any = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let providerRequestId: string | undefined;
   logStudyStep({
     requestId: input.requestId,
     projectId: input.corpus.projectId,
@@ -264,7 +269,7 @@ export async function generateStudyPlanFromCorpus(input: {
       status: 'start',
       message: 'Zweite KI fuer Lernplan gestartet.',
     });
-    raw = await callOpenAiJson(
+    const rawResult = await callOpenAiJson(
       input.env,
       model,
       [
@@ -293,6 +298,11 @@ export async function generateStudyPlanFromCorpus(input: {
       'kalendulu_study_plan',
       studyPlanJsonSchema,
     );
+    raw = rawResult?.json;
+    inputTokens = rawResult?.usage.inputTokens ?? 0;
+    outputTokens = rawResult?.usage.outputTokens ?? 0;
+    cachedInputTokens = rawResult?.usage.cachedInputTokens ?? 0;
+    providerRequestId = rawResult?.providerRequestId;
     raw = unwrapPlanResponse(raw);
     if (!Array.isArray(raw?.units)) {
       fallbackUsed = true;
@@ -367,7 +377,14 @@ export async function generateStudyPlanFromCorpus(input: {
         ? 'Der Lernplan ist gleichmaessig verteilt und realistisch umsetzbar.'
         : 'Der Lernplan ist dicht. Reduziere Stoff, erhoehe Lernzeit oder verschiebe die Deadline.',
     warnings: [...warnings, ...validationWarnings],
-    estimatedCostUsd: cost,
+    estimatedCostUsd: inputTokens || outputTokens
+      ? computeOpenAiCostUsd({ env: input.env, model, inputTokens, outputTokens, cachedInputTokens })
+      : cost,
     fallbackUsed,
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    model,
+    providerRequestId,
   };
 }

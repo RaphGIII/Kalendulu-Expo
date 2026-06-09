@@ -9,16 +9,6 @@ import {
 } from './subscriptionService';
 import type { SubscriptionStatus } from './types';
 
-const FORCE_PREMIUM_FOR_LOCAL_TESTING = true;
-
-const FORCED_PREMIUM_STATUS: SubscriptionStatus = {
-  tier: 'premium',
-  entitlementActive: true,
-  productId: 'kalendulu_premium_yearly_test',
-  checkedAt: new Date().toISOString(),
-  source: 'fallback',
-};
-
 const FALLBACK_STATUS: SubscriptionStatus = {
   tier: 'free',
   entitlementActive: false,
@@ -29,15 +19,9 @@ const FALLBACK_STATUS: SubscriptionStatus = {
 export function useSubscription() {
   const { user } = useAuth();
   const [status, setStatus] = useState<SubscriptionStatus | null>(null);
-  const [loading, setLoading] = useState(!FORCE_PREMIUM_FOR_LOCAL_TESTING);
+  const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    if (FORCE_PREMIUM_FOR_LOCAL_TESTING) {
-      setStatus(FORCED_PREMIUM_STATUS);
-      setLoading(false);
-      return FORCED_PREMIUM_STATUS;
-    }
-
     setLoading(true);
     const next = await refreshSubscriptionStatus(user?.id);
     setStatus(next);
@@ -46,12 +30,6 @@ export function useSubscription() {
   }, [user?.id]);
 
   const restore = useCallback(async () => {
-    if (FORCE_PREMIUM_FOR_LOCAL_TESTING) {
-      setStatus(FORCED_PREMIUM_STATUS);
-      setLoading(false);
-      return FORCED_PREMIUM_STATUS;
-    }
-
     setLoading(true);
     const next = await restorePurchases(user?.id);
     setStatus(next);
@@ -61,14 +39,6 @@ export function useSubscription() {
 
   useEffect(() => {
     let mounted = true;
-
-    if (FORCE_PREMIUM_FOR_LOCAL_TESTING) {
-      setStatus(FORCED_PREMIUM_STATUS);
-      setLoading(false);
-      return () => {
-        mounted = false;
-      };
-    }
 
     void getCachedSubscriptionStatus()
       .then((cached) => {
@@ -83,9 +53,7 @@ export function useSubscription() {
     };
   }, [refresh]);
 
-  const effectiveStatus = FORCE_PREMIUM_FOR_LOCAL_TESTING
-    ? FORCED_PREMIUM_STATUS
-    : status ?? FALLBACK_STATUS;
+  const effectiveStatus = status ?? FALLBACK_STATUS;
 
   const limits = useMemo(
     () => getTierLimits(effectiveStatus.tier),
@@ -95,7 +63,7 @@ export function useSubscription() {
   return {
     status: effectiveStatus,
     limits,
-    loading: FORCE_PREMIUM_FOR_LOCAL_TESTING ? false : loading,
+    loading,
     refresh,
     restore,
   };

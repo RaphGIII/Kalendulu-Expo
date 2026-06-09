@@ -85,14 +85,16 @@ export function buildStudyResultFromV2(input: {
   };
   const units = input.units.map(unitToKnowledgeUnit);
   const sessions: StudySession[] = [];
-  for (const day of input.days) {
+  const isFreeDemo = input.warnings.some((warning) => /Demo-Modus|Upgrade erforderlich/i.test(warning));
+  const visibleDays = isFreeDemo ? input.days.slice(0, 1) : input.days;
+  for (const day of visibleDays) {
     let offset = 0;
     for (const slot of [...day.slots, ...day.reviewSlots]) {
       sessions.push(slotToSession(slot, day, offset));
       offset += slot.estimatedMinutes + 10;
     }
   }
-  const repetitionItems: SpacedRepetitionItem[] = input.days.flatMap((day) =>
+  const repetitionItems: SpacedRepetitionItem[] = visibleDays.flatMap((day) =>
     day.reviewSlots.flatMap((slot, index) => slot.unitIds.map((unitId) => ({
       id: `rep_${slot.id}_${unitId}`,
       projectId: input.projectId,
@@ -108,7 +110,7 @@ export function buildStudyResultFromV2(input: {
   const reviewMinutes = sessions.filter((session) => session.sessionType === 'review').reduce((sum, session) => sum + session.estimatedMinutes, 0);
   const bufferMinutes = Math.ceil((learningMinutes + reviewMinutes) * 0.15);
   const requiredMinutes = learningMinutes + reviewMinutes + bufferMinutes;
-  const availableMinutes = input.weeklyHours * 60 * Math.max(1, Math.ceil(input.days.length / 7));
+  const availableMinutes = input.weeklyHours * 60 * Math.max(1, Math.ceil(visibleDays.length / 7));
   const plan: StudyPlan = {
     id: `study_plan_${input.projectId}`,
     projectId: input.projectId,
@@ -122,7 +124,9 @@ export function buildStudyResultFromV2(input: {
     recommendation: input.recommendation,
     sessions: sessions.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)),
     repetitionItems,
-    warnings: input.warnings,
+    warnings: isFreeDemo
+      ? [...input.warnings, 'Free Demo: In der App ist nur Tag 1 sichtbar. Upgrade schaltet den vollstaendigen Lernplan frei.']
+      : input.warnings,
   };
 
   return { project, units, plan };

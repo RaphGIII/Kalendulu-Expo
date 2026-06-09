@@ -15,7 +15,7 @@ import {
 import type { UserStudyTier } from './types';
 
 type PremiumPlan = {
-  id: 'free' | 'student' | 'premium' | 'yearly';
+  id: 'free' | 'starter' | 'plus' | 'premium' | 'yearly';
   tier: UserStudyTier;
   title: string;
   badge: string;
@@ -24,7 +24,7 @@ type PremiumPlan = {
   productId?: string;
   cta: string;
   features: string[];
-  tone: 'free' | 'student' | 'premium' | 'yearly';
+  tone: 'free' | 'starter' | 'plus' | 'premium' | 'yearly';
 };
 
 const PLANS: PremiumPlan[] = [
@@ -32,55 +32,69 @@ const PLANS: PremiumPlan[] = [
     id: 'free',
     tier: 'free',
     title: 'Kostenlos',
-    badge: 'Zum Testen',
+    badge: 'Demo',
     price: '0 EUR',
     cta: 'Aktueller Plan',
     tone: 'free',
     features: [
       'Themenliste eingeben',
       'Text einfuegen',
-      'Kleine PDF/DOCX bis 10 Seiten',
-      '1 aktives Lernprojekt',
-      'Algorithmischer Lernplan',
-      'Einfache Fortschrittsansicht',
+      'Grosse Dateien auswaehlen',
+      'Demo-Verarbeitung der ersten 20 Seiten',
+      'Nur Tag 1 sichtbar',
+      '1 Demo-Lernprojekt',
     ],
-    subtitle: 'Fuer grosse Skripte und Exporte brauchst du Premium.',
+    subtitle: 'Upgrade verarbeitet das vollstaendige Dokument.',
   },
   {
-    id: 'student',
-    tier: 'student',
-    title: 'Student',
-    badge: 'Fuer kleine Skripte',
-    price: '1,99 EUR/Monat',
-    productId: REVENUECAT_PRODUCTS.studentMonthly,
-    cta: 'Student waehlen',
-    tone: 'student',
+    id: 'starter',
+    tier: 'starter',
+    title: 'Starter',
+    badge: 'Guensig starten',
+    price: '0,99 EUR/Monat',
+    productId: REVENUECAT_PRODUCTS.starterMonthly,
+    cta: 'Starter waehlen',
+    tone: 'starter',
     features: [
-      'PDF/DOCX bis 100 Seiten',
-      'Bis 300 Seiten pro Monat',
-      'Mehrere Lernprojekte',
-      'PDF-Export',
-      'Lernfortschritt mit Steps',
-      'Priorisierte Tagesplanung',
+      '1 vollstaendiger Lernplan pro Monat',
+      '1 aktives Lernprojekt',
+      'OCR erlaubt',
+      'Bis 50 Seiten pro Monat',
+      'Alle Lerntage sichtbar',
+    ],
+  },
+  {
+    id: 'plus',
+    tier: 'plus',
+    title: 'Plus',
+    badge: 'Beliebt',
+    price: '1,99 EUR/Monat',
+    productId: REVENUECAT_PRODUCTS.plusMonthly,
+    cta: 'Plus waehlen',
+    tone: 'plus',
+    features: [
+      '3 vollstaendige Lernplaene pro Monat',
+      '2 aktive Lernprojekte',
+      'OCR erlaubt',
+      'Bis 100 Seiten pro Monat',
+      'Basis-Export',
     ],
   },
   {
     id: 'premium',
     tier: 'premium',
     title: 'Premium',
-    badge: 'Beliebt',
+    badge: 'Maximal',
     price: '4,99 EUR/Monat',
     productId: REVENUECAT_PRODUCTS.premiumMonthly,
     cta: 'Premium starten',
     tone: 'premium',
     features: [
-      'PDF/DOCX bis 300 Seiten pro Datei',
-      'Bis 1.000 Seiten pro Monat',
-      'KI-Veredelung mit Nano',
-      'PDF- und DOCX-Export',
-      'Vollstaendige Fortschrittsanalyse',
-      'Plan neu berechnen',
-      'Grosse Skripte automatisch strukturieren',
+      '8 vollstaendige Lernplaene pro Monat',
+      '5 aktive Lernprojekte',
+      'Bis 250 Seiten pro Monat',
+      'Voller Export',
+      '2 Neuberechnungen inklusive',
     ],
   },
   {
@@ -88,7 +102,7 @@ const PLANS: PremiumPlan[] = [
     tier: 'premium',
     title: 'Jahresplan',
     badge: 'Bester Wert',
-    price: '39,99 EUR/Jahr',
+    price: '29,99 EUR/Jahr',
     productId: REVENUECAT_PRODUCTS.premiumYearly,
     cta: 'Jahresplan waehlen',
     tone: 'yearly',
@@ -96,8 +110,8 @@ const PLANS: PremiumPlan[] = [
     features: [
       'Alle Premium-Vorteile',
       'Guenstiger als monatlich',
+      'Gleiche Monatslimits wie Premium',
       'Ideal fuer Studium und Pruefungsphasen',
-      'Grosse Skripte langfristig planen',
     ],
   },
 ];
@@ -174,6 +188,8 @@ export default function PremiumScreen() {
                 style={[
                   styles.planCard,
                   plan.tone === 'free' && styles.freeCard,
+                  plan.tone === 'starter' && styles.starterCard,
+                  plan.tone === 'plus' && styles.plusCard,
                   plan.tone === 'premium' && styles.premiumCard,
                   plan.tone === 'yearly' && styles.yearlyCard,
                 ]}
@@ -239,6 +255,8 @@ function makeStyles(
     planList: { gap: 14 },
     planCard: { backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, padding: 18, gap: 14 },
     freeCard: { opacity: 0.92, backgroundColor: colors.cardSecondary },
+    starterCard: { borderColor: colors.border, borderWidth: 1 },
+    plusCard: { borderColor: colors.primary, borderWidth: 1 },
     premiumCard: { borderColor: colors.primary, borderWidth: 2 },
     yearlyCard: { borderColor: colors.success, borderWidth: 2 },
     planTop: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' },

@@ -61,7 +61,7 @@ type ThemeContextValue = {
 
 const defaultSettings: SavedThemeSettings = {
   mode: 'preset',
-  selectedThemeId: 'original',
+  selectedThemeId: 'professional',
   fontPreset: 'system',
   customTheme: defaultCustomTheme,
 };

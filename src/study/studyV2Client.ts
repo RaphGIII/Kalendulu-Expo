@@ -5,7 +5,7 @@ const API_URL =
   process.env.EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL ||
   process.env.EXPO_PUBLIC_PLANNER_API_URL;
 
-export type StudyV2Tier = 'free' | 'premium' | 'plus';
+export type StudyV2Tier = 'free_demo' | 'starter' | 'plus' | 'premium_monthly' | 'premium_yearly';
 export type StudyProcessingStatus = 'pending' | 'running' | 'success' | 'warning' | 'error';
 
 export type StudyProcessingStep = {
@@ -127,6 +127,20 @@ export type StudyV2PlanResult = {
   processingReport: StudyProcessingReport;
 };
 
+export class StudyV2ApiError extends Error {
+  code?: string;
+  upgradeOptions?: string[];
+  reasons?: string[];
+
+  constructor(message: string, data?: any) {
+    super(message);
+    this.name = 'StudyV2ApiError';
+    this.code = data?.code;
+    this.upgradeOptions = Array.isArray(data?.upgradeOptions) ? data.upgradeOptions : undefined;
+    this.reasons = Array.isArray(data?.reasons) ? data.reasons : undefined;
+  }
+}
+
 async function readJsonResponse(res: Response) {
   const text = await res.text();
   try {
@@ -176,7 +190,7 @@ export async function ingestStudyV2(input: {
   });
   const data = await readJsonResponse(res);
   if (!res.ok || !data?.ok) {
-    throw new Error(data?.error ?? 'Study-V2-Ingest fehlgeschlagen.');
+    throw new StudyV2ApiError(data?.message ?? data?.error ?? 'Study-V2-Ingest fehlgeschlagen.', data);
   }
   return data as StudyV2IngestResult;
 }
@@ -198,7 +212,7 @@ export async function generateStudyV2Plan(input: {
   });
   const data = await readJsonResponse(res);
   if (!res.ok || !data?.ok) {
-    throw new Error(data?.error ?? 'Study-V2-Planerzeugung fehlgeschlagen.');
+    throw new StudyV2ApiError(data?.message ?? data?.error ?? 'Study-V2-Planerzeugung fehlgeschlagen.', data);
   }
   return data as StudyV2PlanResult;
 }
@@ -215,7 +229,7 @@ export async function summarizeStudyV2(input: {
   });
   const data = await readJsonResponse(res);
   if (!res.ok || !data?.ok) {
-    throw new Error(data?.error ?? 'Study-V2-Zusammenfassung fehlgeschlagen.');
+    throw new StudyV2ApiError(data?.message ?? data?.error ?? 'Study-V2-Zusammenfassung fehlgeschlagen.', data);
   }
   return data as StudyV2IngestResult;
 }

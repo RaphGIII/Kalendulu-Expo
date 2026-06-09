@@ -1,4 +1,5 @@
 import { parseJsonFromModelResponse } from '../jsonParsing';
+import { computeOpenAiCostUsd } from '../shared/apiPricing';
 import { logStudyStep } from './studyLogger';
 import type { CorpusSummaryResult, StudyCorpusDocumentV2, StudyCorpusTopic, StudyV2Env } from './types';
 
@@ -156,7 +157,7 @@ async function callOpenAiJson(
     const envelope = parseJsonFromModelResponse<any>(responsesRaw);
     const outputText = extractOpenAiResponsesText(envelope);
     const parsed = outputText ? parseJsonFromModelResponse<any>(outputText) : null;
-    if (parsed) return parsed;
+    if (parsed) return { json: parsed, usage: openAiUsageFromResponses(envelope), providerRequestId: envelope?.id };
   }
 
   const chatRes = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -180,7 +181,28 @@ async function callOpenAiJson(
   if (!chatRes.ok) return null;
   const envelope = parseJsonFromModelResponse<any>(raw);
   const content = envelope?.choices?.[0]?.message?.content;
-  return typeof content === 'string' ? parseJsonFromModelResponse<any>(content) : null;
+  const parsed = typeof content === 'string' ? parseJsonFromModelResponse<any>(content) : null;
+  return parsed ? { json: parsed, usage: openAiUsageFromChat(envelope), providerRequestId: envelope?.id } : null;
+}
+
+function openAiUsageFromResponses(envelope: any) {
+  const usage = envelope?.usage ?? {};
+  return {
+    inputTokens: Number(usage.input_tokens ?? 0),
+    outputTokens: Number(usage.output_tokens ?? 0),
+    cachedInputTokens: Number(usage.input_tokens_details?.cached_tokens ?? 0),
+    totalTokens: Number(usage.total_tokens ?? 0),
+  };
+}
+
+function openAiUsageFromChat(envelope: any) {
+  const usage = envelope?.usage ?? {};
+  return {
+    inputTokens: Number(usage.prompt_tokens ?? 0),
+    outputTokens: Number(usage.completion_tokens ?? 0),
+    cachedInputTokens: Number(usage.prompt_tokens_details?.cached_tokens ?? 0),
+    totalTokens: Number(usage.total_tokens ?? 0),
+  };
 }
 
 function extractOpenAiResponsesText(envelope: any) {
@@ -266,6 +288,10 @@ export async function buildCorpusSummary(input: {
   ].join('\n');
 
   let rawSummary: any = null;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let cachedInputTokens = 0;
+  let providerRequestId: string | undefined;
   if (!fallbackUsed) {
     const chunkSummaries: string[] = [];
     for (const [index, part] of parts.entries()) {
@@ -278,7 +304,7 @@ export async function buildCorpusSummary(input: {
         message: `Summary-Chunk ${index + 1}/${parts.length} gestartet.`,
         details: { chunkIndex: index + 1, chunkCharacters: part.length },
       });
-      const chunkJson = await callOpenAiJson(
+      const chunkResult = await callOpenAiJson(
         input.env,
         model,
         system,
@@ -293,6 +319,11 @@ export async function buildCorpusSummary(input: {
         'kalendulu_study_summary',
         summaryJsonSchema,
       );
+      const chunkJson = chunkResult?.json;
+      inputTokens += chunkResult?.usage.inputTokens ?? 0;
+      outputTokens += chunkResult?.usage.outputTokens ?? 0;
+      cachedInputTokens += chunkResult?.usage.cachedInputTokens ?? 0;
+      providerRequestId = providerRequestId ?? chunkResult?.providerRequestId;
       if (chunkJson?.summaryMarkdown || chunkJson?.structuredSummaryJson) {
         chunkSummaries.push(JSON.stringify(chunkJson));
         logStudyStep({
@@ -329,7 +360,7 @@ export async function buildCorpusSummary(input: {
       message: 'Merge der Chunk-Zusammenfassungen gestartet.',
       details: { chunkCount: chunkSummaries.length },
     });
-    rawSummary = await callOpenAiJson(
+    const mergeResult = await callOpenAiJson(
       input.env,
       model,
       system,
@@ -338,6 +369,11 @@ export async function buildCorpusSummary(input: {
       'kalendulu_study_summary',
       summaryJsonSchema,
     );
+    rawSummary = mergeResult?.json;
+    inputTokens += mergeResult?.usage.inputTokens ?? 0;
+    outputTokens += mergeResult?.usage.outputTokens ?? 0;
+    cachedInputTokens += mergeResult?.usage.cachedInputTokens ?? 0;
+    providerRequestId = providerRequestId ?? mergeResult?.providerRequestId;
     if (!rawSummary) {
       fallbackUsed = true;
       warnings.push('Corpus-Zusammenfassung wurde lokal erzeugt, weil die KI-Antwort nicht gueltig war.');
@@ -376,10 +412,17 @@ export async function buildCorpusSummary(input: {
 
   return {
     corpus,
-    estimatedCostUsd,
+    estimatedCostUsd: inputTokens || outputTokens
+      ? computeOpenAiCostUsd({ env: input.env, model, inputTokens, outputTokens, cachedInputTokens })
+      : estimatedCostUsd,
     fallbackUsed,
     warnings,
     chunkCount: parts.length,
+    inputTokens,
+    outputTokens,
+    cachedInputTokens,
+    model,
+    providerRequestId,
   };
 }
 

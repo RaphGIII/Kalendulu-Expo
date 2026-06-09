@@ -60,12 +60,12 @@ import { buildStudyResultFromV2 } from './studyV2Adapter';
 import {
   generateStudyV2Plan,
   ingestStudyV2,
-  redactProcessingReport,
   summarizeStudyV2,
+  StudyV2ApiError,
   type StudyProcessingReport,
-  type StudyProcessingStep,
   type StudyV2Tier,
 } from './studyV2Client';
+import { STUDY_LIMIT_REACHED_COPY } from './studyPlanLimits';
 
 type Mode = 'home' | 'create' | 'processing' | 'preview' | 'detail';
 type MaterialInputMode = 'topics' | 'text' | 'files';
@@ -92,10 +92,6 @@ type SessionDraft = {
 };
 
 dayjs.locale('de');
-
-const FORCE_PREMIUM_FOR_LOCAL_TESTING = true;
-const FORCE_PLUS_FOR_LOCAL_TESTING = true;
-const SHOW_STUDY_PROCESSING_DEBUG = true;
 
 function logStudyClientStep(stage: string, details?: Record<string, unknown>) {
   console.log('[StudyV2]', stage, details ?? {});
@@ -334,29 +330,15 @@ export default function StudyScreen() {
   const { colors, fontFamily } = useAppTheme();
   const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
   const { status: subscription, limits } = useSubscription();
-  const activeStudyTier = FORCE_PREMIUM_FOR_LOCAL_TESTING ? 'premium' : subscription.tier;
-  const activeStudyV2Tier: StudyV2Tier = FORCE_PLUS_FOR_LOCAL_TESTING
-    ? 'plus'
-    : activeStudyTier === 'premium'
-      ? 'premium'
-      : 'free';
-  const activeLimits = useMemo(() => {
-    if (!FORCE_PREMIUM_FOR_LOCAL_TESTING) return limits;
-
-    return {
-      ...limits,
-      tier: 'premium' as const,
-      label: 'Premium Test',
-      maxPagesPerFile: 300,
-      maxPagesPerMonth: 1000,
-      maxFileSizeMb: 100,
-      maxActiveProjects: 100,
-      allowAiEnhancement: true,
-      allowPdfExport: true,
-      allowDocxExport: true,
-      allowLargeDocuments: true,
-    };
-  }, [limits]);
+  const activeStudyTier = subscription.tier;
+  const activeStudyV2Tier: StudyV2Tier = activeStudyTier === 'premium'
+    ? 'premium_monthly'
+    : activeStudyTier === 'plus'
+      ? 'plus'
+    : activeStudyTier === 'starter'
+      ? 'starter'
+      : 'free_demo';
+  const activeLimits = limits;
 
   const [mode, setMode] = useState<Mode>('home');
   const [projects, setProjects] = useState<StudyProject[]>([]);
@@ -380,10 +362,10 @@ export default function StudyScreen() {
   const [uploadMessages, setUploadMessages] = useState<string[]>([]);
   const [preview, setPreview] = useState<StudyBuildResult | null>(null);
   const [processingReport, setProcessingReport] = useState<StudyProcessingReport | null>(null);
-  const [expandedProcessingStepIds, setExpandedProcessingStepIds] = useState<Set<string>>(new Set());
   const [showExamPicker, setShowExamPicker] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
+  const analysisProgressRef = useRef(0);
   const scrollRef = useRef<React.ElementRef<typeof ScrollView> | null>(null);
   const [dayDraft, setDayDraft] = useState<DayDraft | null>(null);
   const [sessionDraft, setSessionDraft] = useState<SessionDraft | null>(null);
@@ -441,7 +423,6 @@ export default function StudyScreen() {
     setUploadMessages([]);
     setPreview(null);
     setProcessingReport(null);
-    setExpandedProcessingStepIds(new Set());
   }
 
   function showInactiveMediaMessage() {
@@ -469,8 +450,15 @@ export default function StudyScreen() {
   }
 
   async function advanceAnalysisProgress(target: number) {
-    setAnalysisProgress((prev) => Math.max(prev, Math.min(100, target)));
-    await new Promise((resolve) => setTimeout(resolve, 160));
+    const start = analysisProgressRef.current;
+    const end = Math.max(start, Math.min(100, target));
+    const steps = 14;
+    for (let index = 1; index <= steps; index += 1) {
+      const next = start + ((end - start) * index) / steps;
+      analysisProgressRef.current = next;
+      setAnalysisProgress(next);
+      await new Promise((resolve) => setTimeout(resolve, 45));
+    }
   }
 
   async function addFile() {
@@ -503,17 +491,20 @@ export default function StudyScreen() {
       }
 
       const estimatedPages = estimatePagesFromFile({ name: asset.name, size: asset.size });
-      const validation = validateStudyFileAgainstTier({
-        tier: activeStudyTier,
-        name: asset.name,
-        size: asset.size,
-        estimatedPages,
-        usage,
-      });
+      if (activeStudyV2Tier !== 'free_demo') {
+        const validation = validateStudyFileAgainstTier({
+          tier: activeStudyTier,
+          name: asset.name,
+          size: asset.size,
+          estimatedPages,
+          usage,
+        });
 
-      if (!validation.ok) {
-        showPaywall(validation.reason, validation.message);
-        continue;
+        if (!validation.ok) {
+          showPaywall(validation.reason, validation.message);
+          continue;
+        }
+        await addStudyUsagePages(estimatedPages);
       }
 
       newFiles.push(createTemporaryAsset({
@@ -523,7 +514,6 @@ export default function StudyScreen() {
         mimeType: asset.mimeType,
         size: asset.size,
       }));
-      await addStudyUsagePages(estimatedPages);
     }
 
     setFiles((prev) => [...prev, ...newFiles]);
@@ -566,9 +556,10 @@ export default function StudyScreen() {
 
     try {
       setIsAnalyzing(true);
-      setAnalysisProgress(4);
+      analysisProgressRef.current = 0;
+      setAnalysisProgress(0);
+      await advanceAnalysisProgress(6);
       setProcessingReport(null);
-      setExpandedProcessingStepIds(new Set());
       scrollRef.current?.scrollTo({ y: 0, animated: true });
       if (files.length) {
         setMode('processing');
@@ -592,7 +583,6 @@ export default function StudyScreen() {
               details: {
                 fileNames: files.map((file) => file.name),
                 totalBytes: files.reduce((sum, file) => sum + (file.size ?? 0), 0),
-                localTestMode: FORCE_PLUS_FOR_LOCAL_TESTING,
               },
             },
           ],
@@ -736,10 +726,19 @@ export default function StudyScreen() {
         ],
       }));
       setMode(files.length ? 'processing' : 'create');
-      Alert.alert('Lernplan konnte nicht erstellt werden', error?.message ?? 'Bitte versuche es erneut.');
+      if (error instanceof StudyV2ApiError && error.code === 'MONTHLY_AI_LIMIT_REACHED') {
+        Alert.alert(STUDY_LIMIT_REACHED_COPY.title, STUDY_LIMIT_REACHED_COPY.message, [
+          { text: 'Extra KI-Projekt kaufen - 0,99 EUR', onPress: () => router.push('/premium') },
+          { text: 'Plan upgraden', onPress: () => router.push('/premium') },
+          { text: 'Spaeter', style: 'cancel' },
+        ]);
+      } else {
+        Alert.alert('Lernplan konnte nicht erstellt werden', error?.message ?? 'Bitte versuche es erneut.');
+      }
     } finally {
       setTimeout(() => {
         setIsAnalyzing(false);
+        analysisProgressRef.current = 0;
         setAnalysisProgress(0);
       }, 250);
     }
@@ -1180,62 +1179,6 @@ export default function StudyScreen() {
     }
   }
 
-  function processingStatusLabel(status: StudyProcessingStep['status']) {
-    if (status === 'pending') return 'wartet';
-    if (status === 'running') return 'läuft';
-    if (status === 'success') return 'erfolgreich';
-    if (status === 'warning') return 'Warnung';
-    return 'fehlgeschlagen';
-  }
-
-  function processingStatusStyle(status: StudyProcessingStep['status']) {
-    if (status === 'success') return styles.processingBadgeSuccess;
-    if (status === 'warning') return styles.processingBadgeWarning;
-    if (status === 'error') return styles.processingBadgeError;
-    return styles.processingBadgeNeutral;
-  }
-
-  function toggleProcessingStep(stepId: string) {
-    setExpandedProcessingStepIds((current) => {
-      const next = new Set(current);
-      if (next.has(stepId)) next.delete(stepId);
-      else next.add(stepId);
-      return next;
-    });
-  }
-
-  async function copyDebugDetails() {
-    const redacted = redactProcessingReport(processingReport);
-    const text = JSON.stringify(redacted, null, 2);
-    const clipboard = (globalThis.navigator as any)?.clipboard;
-    if (clipboard?.writeText) {
-      await clipboard.writeText(text);
-      Alert.alert('Kopiert', 'Debug-Details wurden ohne Rohtext kopiert.');
-      return;
-    }
-    console.log('StudyProcessingReport', text);
-    Alert.alert('Debug-Details', 'Clipboard ist in dieser Umgebung nicht verfügbar. Ich habe die Details in die Konsole geschrieben.');
-  }
-
-  function renderProcessingStep(stepItem: StudyProcessingStep) {
-    const expanded = expandedProcessingStepIds.has(stepItem.id);
-    const details = stepItem.details ? JSON.stringify(stepItem.details, null, 2) : '';
-    return (
-      <Pressable key={stepItem.id} onPress={() => toggleProcessingStep(stepItem.id)} style={styles.processingCard}>
-        <View style={styles.processingHeader}>
-          <Text style={styles.projectTitle}>{stepItem.title}</Text>
-          <Text style={[styles.processingBadge, processingStatusStyle(stepItem.status)]}>{processingStatusLabel(stepItem.status)}</Text>
-        </View>
-        {stepItem.message ? <Text style={styles.metaText}>{stepItem.message}</Text> : null}
-        {stepItem.error ? <Text style={styles.warningText}>{stepItem.error}</Text> : null}
-        {stepItem.warnings?.map((warning) => <Text key={warning} style={styles.warningText}>{warning}</Text>)}
-        {expanded && SHOW_STUDY_PROCESSING_DEBUG ? (
-          <Text style={styles.debugText}>{details || 'Keine weiteren Details.'}</Text>
-        ) : null}
-      </Pressable>
-    );
-  }
-
   async function completeStep(step: StudyProgressStep) {
     await completeStudyProgressStep({
       stepId: step.id,
@@ -1247,49 +1190,18 @@ export default function StudyScreen() {
   }
 
   if (mode === 'processing') {
-    const steps = processingReport?.steps ?? [];
-    const doneSteps = steps.filter((item) => item.status === 'success' || item.status === 'warning' || item.status === 'error').length;
-    const percent = steps.length ? Math.min(100, Math.round((doneSteps / Math.max(1, steps.length)) * 100)) : analysisProgress;
     return (
       <SafeAreaView style={styles.safe}>
-        <ScrollView ref={scrollRef} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-          <Pressable onPress={() => setMode('create')} style={styles.backBtn}><Text style={styles.backText}>Zurück</Text></Pressable>
+        <View style={styles.loadingScreen}>
           <Text style={styles.title}>Lernplan wird erstellt</Text>
           <Text style={styles.subtitle}>
-            Die Prüfübersicht zeigt jeden Verarbeitungsschritt. Rohtexte werden hier nicht vollständig angezeigt.
+            Kalendulu bereinigt den Stoff, erkennt Lerneinheiten und verteilt deinen Plan auf realistische Lerntage.
           </Text>
           <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, percent))}%` }]} />
+            <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, analysisProgress))}%` }]} />
           </View>
-          <Text style={styles.progressText}>{percent} %</Text>
-          {SHOW_STUDY_PROCESSING_DEBUG ? (
-            <>
-              {steps.map(renderProcessingStep)}
-              {!steps.length ? <Text style={styles.emptyText}>Verarbeitung wird vorbereitet.</Text> : null}
-            </>
-          ) : (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Verarbeitung läuft</Text>
-              <Text style={styles.metaText}>Dateien werden geprüft, zusammengefasst und in Lerntage verteilt.</Text>
-            </View>
-          )}
-          <View style={styles.actionRow}>
-            <Pressable onPress={() => void analyze()} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Erneut versuchen</Text></Pressable>
-            <Pressable onPress={() => void copyDebugDetails()} style={styles.secondaryBtn}><Text style={styles.secondaryText}>Debug-Details kopieren</Text></Pressable>
-          </View>
-          {preview ? (
-            <Pressable onPress={() => setMode('preview')} style={styles.primaryBtn}><Text style={styles.primaryText}>Lernplan anzeigen</Text></Pressable>
-          ) : null}
-          <Pressable
-            onPress={() => {
-              resetCreateForm();
-              setMode('home');
-            }}
-            style={styles.dangerBtn}
-          >
-            <Text style={styles.dangerText}>Projekt löschen</Text>
-          </Pressable>
-        </ScrollView>
+          <Text style={styles.progressText}>{Math.round(analysisProgress)} %</Text>
+        </View>
       </SafeAreaView>
     );
   }
