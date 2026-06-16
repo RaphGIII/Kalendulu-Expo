@@ -80,6 +80,8 @@ export type StudyPlan = {
   sessions: StudySession[];
   repetitionItems: SpacedRepetitionItem[];
   warnings?: string[];
+  lockedSessionIds?: string[];
+  lockedReason?: string;
 };
 
 export type StudyAvailability = {

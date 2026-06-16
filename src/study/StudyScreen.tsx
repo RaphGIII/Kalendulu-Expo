@@ -919,6 +919,18 @@ export default function StudyScreen() {
 
   function renderStudyDayCards(input: { scope: EditScope; projectId: string; plan: StudyPlan; availableUnits: KnowledgeUnit[] }) {
     const days = groupSessionsByStudyDay(input.plan);
+    const lockedSessionIds = new Set(input.plan.lockedSessionIds ?? []);
+
+    function showLockedPlanPaywall() {
+      Alert.alert(
+        'Vollstaendigen Lernplan freischalten',
+        input.plan.lockedReason ?? 'Wenn du den vollstaendigen Lernplan angezeigt bekommen willst, steige auf Premium um.',
+        [
+          { text: 'Abo-Modelle ansehen', onPress: () => router.push('/premium') },
+          { text: 'Spaeter', style: 'cancel' },
+        ],
+      );
+    }
 
     if (!days.length) {
       return <Text style={styles.emptyText}>Keine geplanten Lerntage.</Text>;
@@ -927,17 +939,25 @@ export default function StudyScreen() {
     return days.map((day) => {
       const expanded = expandedStudyDay === `${input.scope}_${day.dateKey}`;
       const expandedKey = `${input.scope}_${day.dateKey}`;
+      const locked = day.sessions.length > 0 && day.sessions.every((session) => lockedSessionIds.has(session.id));
 
       return (
-        <View key={expandedKey} style={styles.studyDayCard}>
+        <View key={expandedKey} style={[styles.studyDayCard, locked && styles.lockedStudyDayCard]}>
           <Pressable
-            onPress={() => setExpandedStudyDay(expanded ? null : expandedKey)}
+            onPress={() => {
+              if (locked) {
+                showLockedPlanPaywall();
+                return;
+              }
+              setExpandedStudyDay(expanded ? null : expandedKey);
+            }}
             style={styles.studyDayHeader}
           >
             <View style={styles.dayHeaderText}>
               <Text style={styles.studyDayTitle}>{formatStudyDateTitle(day.dateKey)}</Text>
+              {locked ? <Text style={styles.lockedDayText}>Premium freischalten</Text> : null}
             </View>
-            <Text style={styles.studyDayChevron}>{expanded ? '−' : '+'}</Text>
+            <Text style={styles.studyDayChevron}>{locked ? 'Gesperrt' : expanded ? '-' : '+'}</Text>
           </Pressable>
 
           {expanded ? (
@@ -1558,9 +1578,11 @@ function makeStyles(
     unitTitle: { flex: 1, color: colors.text, fontWeight: '900', fontSize: 15, fontFamily: fontFamily.bold },
     unitBadge: { color: colors.primary, backgroundColor: colors.cardSecondary, borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900', fontFamily: fontFamily.bold },
     studyDayCard: { borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, padding: 16, marginBottom: 8 },
+    lockedStudyDayCard: { opacity: 0.55 },
     studyDayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
     studyDayTitle: { color: colors.text, fontSize: 18, fontWeight: '900', fontFamily: fontFamily.bold, textTransform: 'capitalize' },
-    studyDayChevron: { color: colors.primary, fontSize: 28, fontWeight: '900', fontFamily: fontFamily.bold },
+    lockedDayText: { color: colors.primary, fontSize: 12, fontWeight: '900', marginTop: 4, fontFamily: fontFamily.bold },
+    studyDayChevron: { color: colors.primary, fontSize: 16, fontWeight: '900', fontFamily: fontFamily.bold },
     studyDayDetails: { marginTop: 14, gap: 12 },
     dayManagementRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
     learnBlock: { borderRadius: 16, padding: 12, backgroundColor: 'rgba(234, 179, 8, 0.12)', gap: 8 },

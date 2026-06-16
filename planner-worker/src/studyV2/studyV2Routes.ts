@@ -135,7 +135,7 @@ function applyStudySampleLimit(extracted: Awaited<ReturnType<typeof extractByTyp
       text: sampledText,
       warnings: [
         ...extracted.warnings,
-        'Demo-Modus: Es wurden nur die ersten 20 Seiten verarbeitet. Upgrade verarbeitet das gesamte Dokument.',
+        'Demo-Modus: Es wurden nur die ersten 5 Seiten verarbeitet. Upgrade verarbeitet das gesamte Dokument.',
       ],
     },
     pagesProcessed: samplePages,
@@ -451,14 +451,28 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   if (!files.length) return fail('Bitte mindestens eine Datei hochladen.', 400, [],);
   if (fileTypes.some((item) => !item)) return fail('Mindestens ein Dateityp wird nicht unterstuetzt.', 400);
 
-  const usageGate = await assertStudyUsageAllowed({
-    env,
-    user,
-    plan: tier,
-    estimatedNextCostEur: tier === 'free_demo' ? 0.01 : 0.03,
-    estimatedNextPages: limits.pageLimit,
-    projectCreation: true,
-  });
+  const usageGate = tier === 'free_demo'
+    ? {
+      allowed: true as const,
+      usage: {
+        computedCostEur: 0,
+        creditUsedEur: 0,
+        pagesProcessed: 0,
+        studyProjectCount: 0,
+        activeProjectCount: 0,
+        extraCreditRemainingEur: 0,
+        extraCreditRemainingUsd: 0,
+      },
+      limit: planLimit,
+    }
+    : await assertStudyUsageAllowed({
+      env,
+      user,
+      plan: tier,
+      estimatedNextCostEur: 0.03,
+      estimatedNextPages: limits.pageLimit,
+      projectCreation: true,
+    });
   if (!usageGate.allowed) return limitFail(usageGate);
 
   const tierAllowed = totalBytes <= limits.maxBytes && limits.canCreateProject;
@@ -622,12 +636,14 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   };
 
   const summaryEstimatedUsd = estimatedCost(cleanedText.length, Math.min(14000, cleanedText.length / 3));
-  const summaryGate = await assertStudyUsageAllowed({
-    env,
-    user,
-    plan: tier,
-    estimatedNextCostEur: summaryEstimatedUsd,
-  });
+  const summaryGate = tier === 'free_demo'
+    ? { allowed: true as const, usage: usageGate.usage, limit: usageGate.limit }
+    : await assertStudyUsageAllowed({
+      env,
+      user,
+      plan: tier,
+      estimatedNextCostEur: summaryEstimatedUsd,
+    });
   if (!summaryGate.allowed) return limitFail(summaryGate);
 
   const summary = await buildCorpusSummary({
@@ -795,12 +811,14 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
   const planTier = normalizeStudyBillingPlan(corpus.project?.tierSnapshot ?? body.tier ?? 'free_demo');
   const planLimit = getStudyPlanLimit(planTier);
   const planEstimatedUsd = estimatedCost(corpus.summaryMarkdown?.length ?? 0, Math.min(12000, corpus.summaryMarkdown?.length ?? 0));
-  const planGate = await assertStudyUsageAllowed({
-    env,
-    user,
-    plan: planTier,
-    estimatedNextCostEur: planEstimatedUsd,
-  });
+  const planGate = planTier === 'free_demo'
+    ? { allowed: true as const, usage: { computedCostEur: 0, extraCreditRemainingEur: 0 }, limit: getStudyPlanLimit(planTier) }
+    : await assertStudyUsageAllowed({
+      env,
+      user,
+      plan: planTier,
+      estimatedNextCostEur: planEstimatedUsd,
+    });
   if (!planGate.allowed) return limitFail(planGate);
 
   const plan = await generateStudyPlanFromCorpus({

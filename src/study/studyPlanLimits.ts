@@ -18,6 +18,5 @@ export const STUDY_LIMIT_REACHED_COPY = {
   message:
     'Du hast dein monatliches KI-Budget ausgeschoepft. Du kannst zusaetzliche KI-Credits kaufen oder auf einen hoeheren Plan wechseln.',
   freeDemo:
-    'Im kostenlosen Modus wurde nur eine Demo aus den ersten 20 Seiten erstellt. Upgrade, um das vollstaendige Dokument zu verarbeiten.',
+    'Im kostenlosen Modus wurde nur eine Demo aus den ersten 5 Seiten erstellt. Upgrade, um das vollstaendige Dokument zu verarbeiten.',
 };
-

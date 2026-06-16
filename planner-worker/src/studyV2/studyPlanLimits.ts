@@ -34,8 +34,8 @@ export const STUDY_PLAN_LIMITS: Record<StudyBillingPlan, StudyPlanLimit> = {
     fullPlansPerMonth: 1,
     activeProjectLimit: 1,
     ocrAllowed: true,
-    pagesPerMonth: 20,
-    freeSamplePages: 20,
+    pagesPerMonth: 5,
+    freeSamplePages: 5,
     visibleDaysAfterPlan: 1,
     exportLevel: 'none',
     includedRegenerationsPerMonth: 0,
@@ -133,4 +133,3 @@ export function mapRevenueCatProductToStudyPlan(productId?: string): StudyBillin
   if (id.includes('premium')) return 'premium_monthly';
   return null;
 }
-
