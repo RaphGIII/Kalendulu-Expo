@@ -1,13 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Linking } from 'react-native';
+import type { CustomerInfo, PurchasesOffering, PurchasesPackage } from 'react-native-purchases';
 
 import { STORAGE_KEYS } from '../shared/storageKeys';
 import { loadCloudState, saveCloudState } from '../shared/cloudState';
 import {
+  REVENUECAT_ENTITLEMENT_PLUS,
   REVENUECAT_ENTITLEMENT_PREMIUM,
+  REVENUECAT_ENTITLEMENT_STARTER,
   REVENUECAT_PRODUCTS,
   STUDY_TIER_LIMITS,
-  tierFromProduct,
 } from './entitlements';
 import { configureRevenueCat, hasRevenueCatConfig, Purchases } from './revenueCatClient';
 import type { SubscriptionStatus, UserStudyTier } from './types';
@@ -32,6 +34,34 @@ async function cacheStatus(status: SubscriptionStatus) {
   await saveCloudState(STORAGE_KEYS.BILLING_STATUS, status);
 }
 
+function activeProductIdForPlan(customerInfo: CustomerInfo, tier: UserStudyTier) {
+  if (tier === 'free') return undefined;
+  const entitlementId = tier === 'premium'
+    ? REVENUECAT_ENTITLEMENT_PREMIUM
+    : tier === 'plus'
+      ? REVENUECAT_ENTITLEMENT_PLUS
+      : REVENUECAT_ENTITLEMENT_STARTER;
+  return customerInfo.entitlements.active[entitlementId]?.productIdentifier;
+}
+
+function statusFromCustomerInfo(customerInfo: CustomerInfo): SubscriptionStatus {
+  const tier = getActiveKalenduluPlan(customerInfo);
+  return {
+    tier,
+    entitlementActive: tier !== 'free',
+    productId: activeProductIdForPlan(customerInfo, tier),
+    checkedAt: new Date().toISOString(),
+    source: 'revenuecat',
+  };
+}
+
+async function ensureRevenueCatReady(userId?: string) {
+  const configured = await configureRevenueCat(userId);
+  if (!configured || !hasRevenueCatConfig()) {
+    throw new Error('RevenueCat ist noch nicht konfiguriert. Bitte pruefe die API Keys und den nativen Build.');
+  }
+}
+
 export async function getCachedSubscriptionStatus(): Promise<SubscriptionStatus> {
   const cloud = await loadCloudState<SubscriptionStatus>(STORAGE_KEYS.BILLING_STATUS);
   if (cloud) return normalizeStatus({ ...cloud, source: 'cache' });
@@ -53,16 +83,7 @@ export async function refreshSubscriptionStatus(userId?: string): Promise<Subscr
 
   try {
     const info = await Purchases.getCustomerInfo();
-    const premium = info.entitlements.active[REVENUECAT_ENTITLEMENT_PREMIUM];
-    const activeProductId = premium?.productIdentifier;
-    const tier: UserStudyTier = premium?.isActive ? tierFromProduct(activeProductId) : 'free';
-    const status: SubscriptionStatus = {
-      tier,
-      entitlementActive: Boolean(premium?.isActive),
-      productId: activeProductId,
-      checkedAt: new Date().toISOString(),
-      source: 'revenuecat',
-    };
+    const status = statusFromCustomerInfo(info);
     await cacheStatus(status);
     return status;
   } catch {
@@ -70,12 +91,41 @@ export async function refreshSubscriptionStatus(userId?: string): Promise<Subscr
   }
 }
 
+export async function getRevenueCatOffering(userId?: string): Promise<PurchasesOffering> {
+  await ensureRevenueCatReady(userId);
+  const offerings = await Purchases.getOfferings();
+  if (!offerings.current) {
+    throw new Error('RevenueCat hat kein aktuelles Offering. Bitte setze im RevenueCat Dashboard das Offering "default" als Current Offering.');
+  }
+  return offerings.current;
+}
+
+export async function purchaseRevenueCatPackage(packageToPurchase: PurchasesPackage, userId?: string): Promise<CustomerInfo> {
+  await ensureRevenueCatReady(userId);
+  const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
+  await cacheStatus(statusFromCustomerInfo(customerInfo));
+  return customerInfo;
+}
+
+export async function restoreRevenueCatPurchases(userId?: string): Promise<CustomerInfo> {
+  await ensureRevenueCatReady(userId);
+  const customerInfo = await Purchases.restorePurchases();
+  await cacheStatus(statusFromCustomerInfo(customerInfo));
+  return customerInfo;
+}
+
+export function getActiveKalenduluPlan(customerInfo: CustomerInfo): UserStudyTier {
+  const active = customerInfo.entitlements.active;
+  if (active[REVENUECAT_ENTITLEMENT_PREMIUM]?.isActive) return 'premium';
+  if (active[REVENUECAT_ENTITLEMENT_PLUS]?.isActive) return 'plus';
+  if (active[REVENUECAT_ENTITLEMENT_STARTER]?.isActive) return 'starter';
+  return 'free';
+}
+
 export async function restorePurchases(userId?: string) {
-  await configureRevenueCat(userId);
-  if (!hasRevenueCatConfig()) return getCachedSubscriptionStatus();
   try {
-    await Purchases.restorePurchases();
-    return refreshSubscriptionStatus(userId);
+    const customerInfo = await restoreRevenueCatPurchases(userId);
+    return statusFromCustomerInfo(customerInfo);
   } catch {
     return getCachedSubscriptionStatus();
   }

@@ -1,6 +1,8 @@
 import type { StudyTierLimits, UserStudyTier } from './types';
 
 export const REVENUECAT_ENTITLEMENT_PREMIUM = 'premium';
+export const REVENUECAT_ENTITLEMENT_PLUS = 'plus';
+export const REVENUECAT_ENTITLEMENT_STARTER = 'starter';
 
 export const REVENUECAT_PRODUCTS = {
   starterMonthly: 'kalendulu_starter_monthly',

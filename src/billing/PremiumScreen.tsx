@@ -1,27 +1,33 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import type { PurchasesPackage } from 'react-native-purchases';
 
 import { useAuth } from '../auth/AuthProvider';
 import { useAppTheme } from '../theme/ThemeProvider';
 import {
+  getActiveKalenduluPlan,
+  getRevenueCatOffering,
   openSubscriptionManagement,
+  purchaseRevenueCatPackage,
   purchaseRevenueCatProduct,
   REVENUECAT_PRODUCTS,
   restorePurchases,
+  tierFromProduct,
   useSubscription,
 } from './index';
 import type { UserStudyTier } from './types';
 
 type PremiumPlan = {
-  id: 'free' | 'starter' | 'plus' | 'premium' | 'yearly';
+  id: string;
   tier: UserStudyTier;
   title: string;
   badge: string;
   price: string;
   subtitle?: string;
   productId?: string;
+  packageToPurchase?: PurchasesPackage;
   cta: string;
   features: string[];
   tone: 'free' | 'starter' | 'plus' | 'premium' | 'yearly';
@@ -116,25 +122,92 @@ const PLANS: PremiumPlan[] = [
   },
 ];
 
+function planFromPackage(packageToPurchase: PurchasesPackage): PremiumPlan {
+  const productId = packageToPurchase.product.identifier;
+  const configuredPlan = PLANS.find((plan) => plan.productId === productId);
+  if (configuredPlan) {
+    return {
+      ...configuredPlan,
+      price: packageToPurchase.product.priceString,
+      packageToPurchase,
+    };
+  }
+
+  const tier = tierFromProduct(productId);
+  return {
+    id: productId,
+    tier,
+    title: packageToPurchase.product.title || 'Kalendulu Abo',
+    badge: 'RevenueCat',
+    price: packageToPurchase.product.priceString,
+    productId,
+    packageToPurchase,
+    cta: 'Auswaehlen',
+    tone: tier === 'premium' ? 'premium' : tier === 'plus' ? 'plus' : tier === 'starter' ? 'starter' : 'premium',
+    features: [
+      packageToPurchase.product.description || 'Schaltet den zugeordneten Kalendulu Plan frei.',
+      'Abrechnung sicher ueber den App Store',
+      'Abo jederzeit ueber Apple verwaltbar',
+    ],
+  };
+}
+
 export default function PremiumScreen() {
   const { colors, fontFamily } = useAppTheme();
   const { user } = useAuth();
   const subscription = useSubscription();
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
+  const [offeringPackages, setOfferingPackages] = useState<PurchasesPackage[] | null>(null);
+  const [offeringError, setOfferingError] = useState<string | null>(null);
   const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
+  const displayedPlans = useMemo(() => {
+    if (!offeringPackages?.length) return PLANS;
+    const paidPlans = offeringPackages
+      .map(planFromPackage)
+      .sort((a, b) => PLANS.findIndex((plan) => plan.productId === a.productId) - PLANS.findIndex((plan) => plan.productId === b.productId));
+    return [PLANS[0], ...paidPlans];
+  }, [offeringPackages]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void getRevenueCatOffering(user?.id)
+      .then((offering) => {
+        if (!mounted) return;
+        setOfferingPackages(offering.availablePackages);
+        setOfferingError(null);
+      })
+      .catch((error: any) => {
+        if (!mounted) return;
+        setOfferingPackages(null);
+        setOfferingError(error?.message ?? 'RevenueCat Offering konnte nicht geladen werden.');
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [user?.id]);
 
   async function buy(plan: PremiumPlan) {
     if (!plan.productId) return;
     setBusyPlan(plan.id);
     try {
-      const result = await purchaseRevenueCatProduct(plan.productId, user?.id);
-      if (!result.configured) {
-        Alert.alert('Premium', 'Premium ist noch nicht vollstaendig eingerichtet. Bitte versuche es spaeter erneut.');
-      } else if (!result.cancelled) {
+      if (plan.packageToPurchase) {
+        const customerInfo = await purchaseRevenueCatPackage(plan.packageToPurchase, user?.id);
+        const activePlan = getActiveKalenduluPlan(customerInfo);
         await subscription.refresh();
-        Alert.alert('Premium aktiv', 'Dein Plan wurde aktualisiert.');
+        Alert.alert('Premium aktiv', activePlan === 'free' ? 'Der Kauf wurde verarbeitet, aber kein aktives Entitlement gefunden.' : `Dein Plan wurde auf ${activePlan} aktualisiert.`);
+      } else {
+        const result = await purchaseRevenueCatProduct(plan.productId, user?.id);
+        if (!result.configured) {
+          Alert.alert('Premium', 'Premium ist noch nicht vollstaendig eingerichtet. Bitte versuche es spaeter erneut.');
+        } else if (!result.cancelled) {
+          await subscription.refresh();
+          Alert.alert('Premium aktiv', 'Dein Plan wurde aktualisiert.');
+        }
       }
-    } catch {
+    } catch (error: any) {
+      if (error?.userCancelled) return;
       Alert.alert('Premium', 'Der Kauf konnte gerade nicht abgeschlossen werden. Bitte versuche es spaeter erneut.');
     } finally {
       setBusyPlan(null);
@@ -176,7 +249,8 @@ export default function PremiumScreen() {
         </Text>
 
         <View style={styles.planList}>
-          {PLANS.map((plan) => {
+          {offeringError ? <Text style={styles.offeringHint}>{offeringError}</Text> : null}
+          {displayedPlans.map((plan) => {
             const current =
               plan.id === 'yearly'
                 ? subscription.status.productId === plan.productId
@@ -253,6 +327,7 @@ function makeStyles(
     title: { color: colors.text, fontSize: 32, fontWeight: '900', fontFamily: fontFamily.bold },
     subtitle: { color: colors.textMuted, fontSize: 15, lineHeight: 22, fontFamily: fontFamily.regular },
     planList: { gap: 14 },
+    offeringHint: { color: colors.textMuted, backgroundColor: colors.cardSecondary, borderRadius: 14, padding: 12, lineHeight: 19, fontFamily: fontFamily.regular },
     planCard: { backgroundColor: colors.card, borderRadius: 18, borderWidth: 1, borderColor: colors.border, padding: 18, gap: 14 },
     freeCard: { opacity: 0.92, backgroundColor: colors.cardSecondary },
     starterCard: { borderColor: colors.border, borderWidth: 1 },
