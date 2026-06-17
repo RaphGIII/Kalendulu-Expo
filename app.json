@@ -8,12 +8,12 @@
     "scheme": "kalendulu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    "ios": {
+    
+"ios": {
   "supportsTablet": true,
-  "newArchEnabled": false,
   "icon": "./assets/images/icon.png",
   "bundleIdentifier": "com.kalendulu.app",
-  "buildNumber": "6",
+  "buildNumber": "5",
   "infoPlist": {
     "NSPhotoLibraryUsageDescription": "Kalendulu verwendet den Zugriff auf deine Fotos nur, wenn du ein Profilbild auswählen möchtest.",
     "ITSAppUsesNonExemptEncryption": false
