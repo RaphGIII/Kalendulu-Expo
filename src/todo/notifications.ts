@@ -19,6 +19,7 @@ function ensureNotificationHandler() {
       }),
     });
     notificationHandlerConfigured = true;
+    console.log('[notifications] loaded');
   } catch {
     notificationHandlerConfigured = false;
   }

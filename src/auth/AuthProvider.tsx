@@ -41,17 +41,21 @@ const devBypassUser = {
 } as unknown as User;
 
 async function fetchProfileName(userId: string): Promise<string> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('full_name')
-    .eq('id', userId)
-    .maybeSingle();
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('full_name')
+      .eq('id', userId)
+      .maybeSingle();
 
-  if (error) {
+    if (error) {
+      return '';
+    }
+
+    return data?.full_name ?? '';
+  } catch {
     return '';
   }
-
-  return data?.full_name ?? '';
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -96,27 +100,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const bootstrap = async () => {
-      const { data } = await supabase.auth.getSession();
+      try {
+        const { data } = await supabase.auth.getSession();
 
-      if (!mounted) return;
-
-      setSession(data.session);
-
-      if (data.session?.user?.id) {
-        const profileName = await fetchProfileName(data.session.user.id);
         if (!mounted) return;
 
-        const fallbackName =
-          (data.session.user.user_metadata?.full_name as string | undefined) ||
-          (data.session.user.user_metadata?.name as string | undefined) ||
-          '';
+        setSession(data.session);
 
-        setFullName(profileName || fallbackName || '');
-      } else {
+        if (data.session?.user?.id) {
+          const profileName = await fetchProfileName(data.session.user.id);
+          if (!mounted) return;
+
+          const fallbackName =
+            (data.session.user.user_metadata?.full_name as string | undefined) ||
+            (data.session.user.user_metadata?.name as string | undefined) ||
+            '';
+
+          setFullName(profileName || fallbackName || '');
+        } else {
+          setFullName('');
+        }
+
+        if (mounted) {
+          setAuthReady(true);
+        }
+      } catch {
+        if (!mounted) return;
+        setSession(null);
         setFullName('');
-      }
-
-      if (mounted) {
         setAuthReady(true);
       }
     };

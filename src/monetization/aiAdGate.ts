@@ -63,6 +63,7 @@ function confirmRewardedAdDisclosure(phase: AiAdGatePhase) {
 
 async function showRewardedAdOnce(): Promise<void> {
   const ads = await import("react-native-google-mobile-ads");
+  console.log("[ads] loaded");
   const adUnitId = getRewardedAdUnitId() ?? ads.TestIds.REWARDED;
 
   return new Promise((resolve, reject) => {

@@ -8,17 +8,16 @@
     "scheme": "kalendulu",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
-    
-"ios": {
-  "supportsTablet": true,
-  "icon": "./assets/images/icon.png",
-  "bundleIdentifier": "com.kalendulu.app",
-  "buildNumber": "5",
-  "infoPlist": {
-    "NSPhotoLibraryUsageDescription": "Kalendulu verwendet den Zugriff auf deine Fotos nur, wenn du ein Profilbild auswählen möchtest.",
-    "ITSAppUsesNonExemptEncryption": false
-  }
-},
+    "ios": {
+      "supportsTablet": true,
+      "icon": "./assets/images/icon.png",
+      "bundleIdentifier": "com.kalendulu.app",
+      "buildNumber": "7",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Kalendulu verwendet den Zugriff auf deine Fotos nur, wenn du ein Profilbild auswählen möchtest.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
     "android": {
       "package": "com.raphgiii.kalendulu",
       "adaptiveIcon": {
@@ -60,7 +59,7 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": false
     },
     "extra": {
       "router": {},

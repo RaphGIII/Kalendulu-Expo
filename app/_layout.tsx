@@ -1,118 +1,71 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
+import React, { Suspense, useEffect, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
-import WelcomeIntroOverlay from '@/components/WelcomeIntroOverlay';
-import { AuthProvider, useAuth } from '@/src/auth/AuthProvider';
+const RealAppRoot = React.lazy(() => import('@/src/startup/RealAppRoot'));
 
-const WELCOME_INTRO_STORAGE_PREFIX = 'kalendulu:welcome-intro-shown';
-
-function AppNavigator() {
-  const { ready, colors } = useAppTheme();
-  const { authReady, session, fullName } = useAuth();
-  const [showWelcomeIntro, setShowWelcomeIntro] = useState(false);
-  const shownWelcomeForUserRef = useRef<string | null>(null);
-  const userId = session?.user?.id ?? null;
+export default function RootLayout() {
+  const [loadApp, setLoadApp] = useState(false);
 
   useEffect(() => {
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    console.log('[startup] root rendered');
+  }, []);
 
-    if (!ready || !authReady || !userId) {
-      setShowWelcomeIntro(false);
-      return () => {
-        cancelled = true;
-        if (timer) clearTimeout(timer);
-      };
-    }
-
-    if (shownWelcomeForUserRef.current === userId) {
-      return () => {
-        cancelled = true;
-        if (timer) clearTimeout(timer);
-      };
-    }
-
-    const storageKey = `${WELCOME_INTRO_STORAGE_PREFIX}:${userId}`;
-
-    AsyncStorage.getItem(storageKey)
-      .then((alreadyShown) => {
-        if (cancelled || alreadyShown === 'true') {
-          shownWelcomeForUserRef.current = userId;
-          return;
-        }
-
-        shownWelcomeForUserRef.current = userId;
-        return AsyncStorage.setItem(storageKey, 'true').then(() => {
-          if (cancelled) return;
-          timer = setTimeout(() => {
-            setShowWelcomeIntro(true);
-          }, 120);
-        });
-      })
-      .catch(() => {
-        shownWelcomeForUserRef.current = userId;
-      });
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [ready, authReady, userId]);
-
-  if (!ready || !authReady) {
+  if (!loadApp) {
     return (
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: colors.background,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={styles.safeStartup}>
+        <Text style={styles.title}>Kalendulu startet</Text>
+        <Pressable
+          onPress={() => {
+            console.log('[startup] loading app providers');
+            setLoadApp(true);
+          }}
+          style={styles.button}
+        >
+          <Text style={styles.buttonText}>Weiter</Text>
+        </Pressable>
       </View>
     );
   }
 
-  const nameForWelcome =
-    fullName?.trim() ||
-    (session?.user?.user_metadata?.full_name as string | undefined) ||
-    'Willkommen';
-
   return (
-    <>
-      <StatusBar style="light" />
-
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(tabs)" />
-      </Stack>
-
-      {session ? (
-        <WelcomeIntroOverlay
-          visible={showWelcomeIntro}
-          name={nameForWelcome}
-          onFinish={() => setShowWelcomeIntro(false)}
-        />
-      ) : null}
-    </>
+    <Suspense
+      fallback={
+        <View style={styles.safeStartup}>
+          <ActivityIndicator color="#D4AF37" size="large" />
+        </View>
+      }
+    >
+      <RealAppRoot />
+    </Suspense>
   );
 }
 
-export default function RootLayout() {
-  return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <ThemeProvider>
-        <AuthProvider>
-          <AppNavigator />
-        </AuthProvider>
-      </ThemeProvider>
-    </GestureHandlerRootView>
-  );
-}
+const styles = StyleSheet.create({
+  safeStartup: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+    backgroundColor: '#0F172A',
+    padding: 24,
+  },
+  title: {
+    color: '#F8FAFC',
+    fontSize: 24,
+    fontWeight: '800',
+  },
+  button: {
+    minHeight: 50,
+    minWidth: 140,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 14,
+    backgroundColor: '#D4AF37',
+    paddingHorizontal: 22,
+  },
+  buttonText: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+});

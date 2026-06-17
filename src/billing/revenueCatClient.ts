@@ -11,6 +11,7 @@ export async function getPurchases() {
   if (!purchasesModule) {
     const module = await import('react-native-purchases');
     purchasesModule = module.default;
+    console.log('[revenuecat] loaded');
   }
   return purchasesModule;
 }
