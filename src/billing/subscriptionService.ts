@@ -11,7 +11,7 @@ import {
   REVENUECAT_PRODUCTS,
   STUDY_TIER_LIMITS,
 } from './entitlements';
-import { configureRevenueCat, hasRevenueCatConfig, Purchases } from './revenueCatClient';
+import { configureRevenueCat, getPurchases, hasRevenueCatConfig } from './revenueCatClient';
 import type { SubscriptionStatus, UserStudyTier } from './types';
 
 const DEFAULT_STATUS: SubscriptionStatus = {
@@ -82,6 +82,7 @@ export async function refreshSubscriptionStatus(userId?: string): Promise<Subscr
   }
 
   try {
+    const Purchases = await getPurchases();
     const info = await Purchases.getCustomerInfo();
     const status = statusFromCustomerInfo(info);
     await cacheStatus(status);
@@ -93,6 +94,7 @@ export async function refreshSubscriptionStatus(userId?: string): Promise<Subscr
 
 export async function getRevenueCatOffering(userId?: string): Promise<PurchasesOffering> {
   await ensureRevenueCatReady(userId);
+  const Purchases = await getPurchases();
   const offerings = await Purchases.getOfferings();
   if (!offerings.current) {
     throw new Error('RevenueCat hat kein aktuelles Offering. Bitte setze im RevenueCat Dashboard das Offering "default" als Current Offering.');
@@ -102,6 +104,7 @@ export async function getRevenueCatOffering(userId?: string): Promise<PurchasesO
 
 export async function purchaseRevenueCatPackage(packageToPurchase: PurchasesPackage, userId?: string): Promise<CustomerInfo> {
   await ensureRevenueCatReady(userId);
+  const Purchases = await getPurchases();
   const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
   await cacheStatus(statusFromCustomerInfo(customerInfo));
   return customerInfo;
@@ -109,6 +112,7 @@ export async function purchaseRevenueCatPackage(packageToPurchase: PurchasesPack
 
 export async function restoreRevenueCatPurchases(userId?: string): Promise<CustomerInfo> {
   await ensureRevenueCatReady(userId);
+  const Purchases = await getPurchases();
   const customerInfo = await Purchases.restorePurchases();
   await cacheStatus(statusFromCustomerInfo(customerInfo));
   return customerInfo;
@@ -142,6 +146,7 @@ export async function purchaseRevenueCatProduct(productId: string, userId?: stri
   }
 
   try {
+    const Purchases = await getPurchases();
     await Purchases.purchaseProduct(productId);
     return {
       status: await refreshSubscriptionStatus(userId),

@@ -4,16 +4,28 @@ import dayjs from 'dayjs';
 
 import { loadAppSettings, type NotificationLeadTime } from '../settings/appSettings';
 
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+let notificationHandlerConfigured = false;
+
+function ensureNotificationHandler() {
+  if (notificationHandlerConfigured) return;
+
+  try {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+    notificationHandlerConfigured = true;
+  } catch {
+    notificationHandlerConfigured = false;
+  }
+}
 
 export async function ensureNotificationPermission() {
+  ensureNotificationHandler();
   const settings = await Notifications.getPermissionsAsync();
   if (settings.status === 'granted') return true;
 
@@ -22,6 +34,7 @@ export async function ensureNotificationPermission() {
 }
 
 export async function scheduleTaskReminder(taskTitle: string) {
+  ensureNotificationHandler();
   const appSettings = await loadAppSettings();
   if (!appSettings.notifications.todosEnabled || appSettings.notifications.todoMode === 'off') {
     return null;
@@ -68,6 +81,7 @@ function leadTimeToMinutes(leadTime: NotificationLeadTime) {
 }
 
 export async function scheduleEventReminder(eventTitle: string, start: Date) {
+  ensureNotificationHandler();
   const appSettings = await loadAppSettings();
   if (!appSettings.notifications.eventsEnabled) return null;
 
@@ -107,6 +121,7 @@ export async function cancelReminder(notificationId?: string | null) {
 export async function configureAndroidChannel() {
   if (Platform.OS !== 'android') return;
 
+  ensureNotificationHandler();
   await Notifications.setNotificationChannelAsync('default', {
     name: 'default',
     importance: Notifications.AndroidImportance.MAX,

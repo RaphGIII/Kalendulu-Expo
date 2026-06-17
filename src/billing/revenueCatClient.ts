@@ -1,21 +1,64 @@
-import Purchases from 'react-native-purchases';
+import { Platform } from 'react-native';
 
 const IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
 const ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
 
 let configured = false;
 let configuredUserId: string | undefined;
+let purchasesModule: typeof import('react-native-purchases').default | null = null;
+
+export async function getPurchases() {
+  if (!purchasesModule) {
+    const module = await import('react-native-purchases');
+    purchasesModule = module.default;
+  }
+  return purchasesModule;
+}
+
+function getPlatformRevenueCatApiKey() {
+  const iosKey = IOS_API_KEY?.trim();
+  const androidKey = ANDROID_API_KEY?.trim();
+
+  if (Platform.OS === 'ios') {
+    if (!iosKey) {
+      console.warn('RevenueCat iOS API key is missing. Purchases will stay disabled.');
+      return null;
+    }
+    if (!iosKey.startsWith('appl_')) {
+      console.warn('RevenueCat iOS API key is malformed or not an iOS public SDK key. Purchases will stay disabled.');
+      return null;
+    }
+    return iosKey;
+  }
+
+  if (Platform.OS === 'android') {
+    if (!androidKey) {
+      console.warn('RevenueCat Android API key is missing. Purchases will stay disabled.');
+      return null;
+    }
+    if (!androidKey.startsWith('goog_')) {
+      console.warn('RevenueCat Android API key is malformed or not an Android public SDK key. Purchases will stay disabled.');
+      return null;
+    }
+    return androidKey;
+  }
+
+  console.warn(`RevenueCat is not configured for platform "${Platform.OS}". Purchases will stay disabled.`);
+  return null;
+}
 
 export function hasRevenueCatConfig() {
-  return Boolean(IOS_API_KEY || ANDROID_API_KEY);
+  return Boolean(getPlatformRevenueCatApiKey());
 }
 
 export async function configureRevenueCat(userId?: string) {
-  if (!hasRevenueCatConfig()) return false;
+  const apiKey = getPlatformRevenueCatApiKey();
+  if (!apiKey) return false;
 
   if (configured) {
     if (userId && userId !== configuredUserId) {
       try {
+        const Purchases = await getPurchases();
         await Purchases.logIn(userId);
         configuredUserId = userId;
       } catch {
@@ -26,8 +69,9 @@ export async function configureRevenueCat(userId?: string) {
   }
 
   try {
+    const Purchases = await getPurchases();
     Purchases.configure({
-      apiKey: IOS_API_KEY ?? ANDROID_API_KEY ?? '',
+      apiKey,
       appUserID: userId,
     });
     configured = true;
@@ -37,5 +81,3 @@ export async function configureRevenueCat(userId?: string) {
     return false;
   }
 }
-
-export { Purchases };

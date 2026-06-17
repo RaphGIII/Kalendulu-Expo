@@ -10,6 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "newArchEnabled": false,
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.kalendulu.app",
       "infoPlist": {

@@ -1,10 +1,4 @@
 import { Alert, Platform } from "react-native";
-import {
-  AdEventType,
-  RewardedAd,
-  RewardedAdEventType,
-  TestIds,
-} from "react-native-google-mobile-ads";
 
 import { assertCanStartFreeAiBlueprint } from "@/src/monetization/aiQuota";
 
@@ -27,7 +21,7 @@ function getRewardedAdUnitId() {
   }
 
   return (
-    process.env.EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID ?? TestIds.REWARDED
+    process.env.EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID
   );
 }
 
@@ -67,19 +61,20 @@ function confirmRewardedAdDisclosure(phase: AiAdGatePhase) {
   });
 }
 
-function showRewardedAdOnce(): Promise<void> {
-  const adUnitId = getRewardedAdUnitId();
+async function showRewardedAdOnce(): Promise<void> {
+  const ads = await import("react-native-google-mobile-ads");
+  const adUnitId = getRewardedAdUnitId() ?? ads.TestIds.REWARDED;
 
   return new Promise((resolve, reject) => {
     let earnedReward = false;
     let settled = false;
 
-    const rewarded = RewardedAd.createForAdRequest(adUnitId, {
+    const rewarded = ads.RewardedAd.createForAdRequest(adUnitId, {
       requestNonPersonalizedAdsOnly: true,
     });
 
     const unsubscribeLoaded = rewarded.addAdEventListener(
-      RewardedAdEventType.LOADED,
+      ads.RewardedAdEventType.LOADED,
       () => {
         rewarded.show().catch(() => {
           settleError(new Error("Anzeige konnte nicht geöffnet werden."));
@@ -88,14 +83,14 @@ function showRewardedAdOnce(): Promise<void> {
     );
 
     const unsubscribeEarned = rewarded.addAdEventListener(
-      RewardedAdEventType.EARNED_REWARD,
+      ads.RewardedAdEventType.EARNED_REWARD,
       () => {
         earnedReward = true;
       },
     );
 
     const unsubscribeClosed = rewarded.addAdEventListener(
-      AdEventType.CLOSED,
+      ads.AdEventType.CLOSED,
       () => {
         if (earnedReward) {
           settleSuccess();
@@ -110,7 +105,7 @@ function showRewardedAdOnce(): Promise<void> {
     );
 
     const unsubscribeError = rewarded.addAdEventListener(
-      AdEventType.ERROR,
+      ads.AdEventType.ERROR,
       () => {
         settleError(
           new Error(
