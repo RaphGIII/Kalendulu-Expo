@@ -20,16 +20,11 @@ import { Link } from 'expo-router';
 
 import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
-import {
-  signInWithSupabaseOAuth,
-  useHandleIncomingOAuthUrl,
-} from '@/src/auth/socialAuth';
 import { LEGAL_LINKS } from "@/src/config/legalLinks";
 const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function RegisterScreen() {
   const { signUp } = useAuth();
-  useHandleIncomingOAuthUrl();
 
   const { height } = useWindowDimensions();
 
@@ -41,7 +36,16 @@ export default function RegisterScreen() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'email' | 'google' | 'apple' | null>(null);
+  const [busy, setBusy] = useState<'email' | null>(null);
+
+  const authErrorMessage = (error: any) => {
+    if (!error) return 'Unbekannter Fehler.';
+    const parts = [
+      error.name ? String(error.name) : '',
+      error.message ? String(error.message) : String(error),
+    ].filter(Boolean);
+    return parts.join(': ');
+  };
 
   const onRegister = async () => {
     if (!fullName.trim() || !email.trim() || !password.trim()) {
@@ -58,29 +62,7 @@ export default function RegisterScreen() {
       setBusy('email');
       await signUp({ fullName, email, password });
     } catch (error: any) {
-      Alert.alert('Registrierung fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const onGoogle = async () => {
-    try {
-      setBusy('google');
-      await signInWithSupabaseOAuth('google');
-    } catch (error: any) {
-      Alert.alert('Google Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const onApple = async () => {
-    try {
-      setBusy('apple');
-      await signInWithSupabaseOAuth('apple');
-    } catch (error: any) {
-      Alert.alert('Apple Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
+      Alert.alert('Registrierung fehlgeschlagen', authErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -116,6 +98,7 @@ export default function RegisterScreen() {
             </View>
 
             <ScrollView
+              style={styles.contentLayer}
               bounces={false}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
@@ -184,36 +167,6 @@ export default function RegisterScreen() {
                     )}
                   </Pressable>
 
-                  <View style={styles.dividerRow}>
-                    <View style={styles.dividerLine} />
-                    <Text style={styles.dividerText}>oder</Text>
-                    <View style={styles.dividerLine} />
-                  </View>
-
-                  <Pressable
-                    onPress={onApple}
-                    disabled={busy !== null}
-                    style={[styles.appleButton, busy ? styles.buttonDisabled : null]}
-                  >
-                    {busy === 'apple' ? (
-                      <ActivityIndicator color="#FFFFFF" />
-                    ) : (
-                      <Text style={styles.appleButtonText}>Mit Apple fortfahren</Text>
-                    )}
-                  </Pressable>
-
-                  <Pressable
-                    onPress={onGoogle}
-                    disabled={busy !== null}
-                    style={[styles.googleButton, busy ? styles.buttonDisabled : null]}
-                  >
-                    {busy === 'google' ? (
-                      <ActivityIndicator color="#2A3550" />
-                    ) : (
-                      <Text style={styles.googleButtonText}>Mit Google fortfahren</Text>
-                    )}
-                  </Pressable>
-
                   <Link href="/login" asChild>
                     <Pressable style={styles.linkWrap}>
                       <Text style={styles.linkText}>Bereits ein Konto? Anmelden</Text>
@@ -233,6 +186,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#1E2758',
+    overflow: 'hidden',
   },
   flex: {
     flex: 1,
@@ -245,13 +199,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    zIndex: 1,
+    zIndex: 0,
+    overflow: 'hidden',
+  },
+  contentLayer: {
+    zIndex: 2,
   },
   scrollContent: {
     flexGrow: 1,
   },
   cardWrap: {
     paddingHorizontal: 24,
+    zIndex: 2,
   },
   card: {
     alignSelf: 'center',
@@ -309,51 +268,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 12,
-    marginBottom: 10,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#D6DCE8',
-  },
-  dividerText: {
-    color: '#7F8BA3',
-    fontSize: 12,
-    fontWeight: '700',
-    marginHorizontal: 10,
-    textTransform: 'lowercase',
-  },
-  appleButton: {
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: '#151B2D',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  appleButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  googleButton: {
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CAD3E3',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  googleButtonText: {
-    color: '#2B3852',
-    fontSize: 14,
-    fontWeight: '700',
   },
   linkWrap: {
     alignItems: 'center',

@@ -19,16 +19,12 @@ import { Link } from 'expo-router';
 
 import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
-import {
-  signInWithSupabaseOAuth,
-  useHandleIncomingOAuthUrl,
-} from '@/src/auth/socialAuth';
+import { supabasePublicConfig } from '@/src/lib/supabase';
 
 const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
-  useHandleIncomingOAuthUrl();
 
   const { height } = useWindowDimensions();
 
@@ -39,7 +35,17 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'email' | 'google' | 'apple' | null>(null);
+  const [busy, setBusy] = useState<'email' | 'connection' | null>(null);
+  const [connectionResult, setConnectionResult] = useState('Noch nicht getestet.');
+
+  const authErrorMessage = (error: any) => {
+    if (!error) return 'Unbekannter Fehler.';
+    const parts = [
+      error.name ? String(error.name) : '',
+      error.message ? String(error.message) : String(error),
+    ].filter(Boolean);
+    return parts.join(': ');
+  };
 
   const onLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -51,29 +57,30 @@ export default function LoginScreen() {
       setBusy('email');
       await signIn({ email, password });
     } catch (error: any) {
-      Alert.alert('Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
+      Alert.alert('Login fehlgeschlagen', authErrorMessage(error));
     } finally {
       setBusy(null);
     }
   };
 
-  const onGoogle = async () => {
-    try {
-      setBusy('google');
-      await signInWithSupabaseOAuth('google');
-    } catch (error: any) {
-      Alert.alert('Google Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
-    } finally {
-      setBusy(null);
+  const testSupabaseConnection = async () => {
+    if (!supabasePublicConfig.url || !supabasePublicConfig.publishableKey) {
+      setConnectionResult('Konfiguration unvollstaendig: Supabase URL oder Key fehlt.');
+      return;
     }
-  };
 
-  const onApple = async () => {
     try {
-      setBusy('apple');
-      await signInWithSupabaseOAuth('apple');
+      setBusy('connection');
+      const response = await fetch(`${supabasePublicConfig.url}/auth/v1/settings`, {
+        headers: {
+          apikey: supabasePublicConfig.publishableKey,
+          Authorization: `Bearer ${supabasePublicConfig.publishableKey}`,
+        },
+      });
+      const text = await response.text();
+      setConnectionResult(`HTTP ${response.status}\n${text.slice(0, 300)}`);
     } catch (error: any) {
-      Alert.alert('Apple Login fehlgeschlagen', error?.message ?? 'Bitte versuche es erneut.');
+      setConnectionResult(`${error?.name ?? 'Error'}: ${error?.message ?? String(error)}`);
     } finally {
       setBusy(null);
     }
@@ -109,6 +116,7 @@ export default function LoginScreen() {
             </View>
 
             <ScrollView
+              style={styles.contentLayer}
               bounces={false}
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
@@ -158,35 +166,26 @@ export default function LoginScreen() {
                     )}
                   </Pressable>
 
-                  <View style={styles.dividerRow}>
-                    <View style={styles.dividerLine} />
-                    <Text style={styles.dividerText}>oder</Text>
-                    <View style={styles.dividerLine} />
+                  <View style={styles.diagnosticsBox}>
+                    <Text style={styles.diagnosticsTitle}>Supabase Diagnose</Text>
+                    <Text style={styles.diagnosticsText}>URL vorhanden: {supabasePublicConfig.urlPresent ? 'ja' : 'nein'}</Text>
+                    <Text style={styles.diagnosticsText}>Host: {supabasePublicConfig.host || '-'}</Text>
+                    <Text style={styles.diagnosticsText}>Key vorhanden: {supabasePublicConfig.keyPresent ? 'ja' : 'nein'}</Text>
+                    <Text style={styles.diagnosticsText}>Key Laenge: {supabasePublicConfig.keyLength}</Text>
+                    <Text style={styles.diagnosticsText}>Key Prefix gueltig: {supabasePublicConfig.keyPrefixValid ? 'ja' : 'nein'}</Text>
+                    <Pressable
+                      onPress={testSupabaseConnection}
+                      disabled={busy !== null}
+                      style={[styles.secondaryButton, busy ? styles.buttonDisabled : null]}
+                    >
+                      {busy === 'connection' ? (
+                        <ActivityIndicator color="#2B3852" />
+                      ) : (
+                        <Text style={styles.secondaryButtonText}>Supabase Verbindung testen</Text>
+                      )}
+                    </Pressable>
+                    <Text style={styles.connectionResult}>{connectionResult}</Text>
                   </View>
-
-                  <Pressable
-                    onPress={onApple}
-                    disabled={busy !== null}
-                    style={[styles.appleButton, busy ? styles.buttonDisabled : null]}
-                  >
-                    {busy === 'apple' ? (
-                      <ActivityIndicator color="#FFFFFF" />
-                    ) : (
-                      <Text style={styles.appleButtonText}>Mit Apple fortfahren</Text>
-                    )}
-                  </Pressable>
-
-                  <Pressable
-                    onPress={onGoogle}
-                    disabled={busy !== null}
-                    style={[styles.googleButton, busy ? styles.buttonDisabled : null]}
-                  >
-                    {busy === 'google' ? (
-                      <ActivityIndicator color="#2A3550" />
-                    ) : (
-                      <Text style={styles.googleButtonText}>Mit Google fortfahren</Text>
-                    )}
-                  </Pressable>
 
                   <Link href="/register" asChild>
                     <Pressable style={styles.linkWrap}>
@@ -207,6 +206,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: '#1E2758',
+    overflow: 'hidden',
   },
   flex: {
     flex: 1,
@@ -219,13 +219,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    zIndex: 1,
+    zIndex: 0,
+    overflow: 'hidden',
+  },
+  contentLayer: {
+    zIndex: 2,
   },
   scrollContent: {
     flexGrow: 1,
   },
   cardWrap: {
     paddingHorizontal: 24,
+    zIndex: 2,
   },
   card: {
     alignSelf: 'center',
@@ -284,50 +289,46 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  diagnosticsBox: {
     marginTop: 12,
-    marginBottom: 10,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#D6DCE8',
-  },
-  dividerText: {
-    color: '#7F8BA3',
-    fontSize: 12,
-    fontWeight: '700',
-    marginHorizontal: 10,
-    textTransform: 'lowercase',
-  },
-  appleButton: {
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: '#151B2D',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-  },
-  appleButtonText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  googleButton: {
-    height: 42,
-    borderRadius: 13,
-    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#CAD3E3',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: '#D6DCE8',
+    backgroundColor: '#FFFFFF',
+    padding: 12,
+    gap: 4,
   },
-  googleButtonText: {
+  diagnosticsTitle: {
     color: '#2B3852',
     fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 3,
+  },
+  diagnosticsText: {
+    color: '#516079',
+    fontSize: 11,
     fontWeight: '700',
+  },
+  secondaryButton: {
+    minHeight: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#CAD3E3',
+    backgroundColor: '#F5F7FB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  secondaryButtonText: {
+    color: '#2B3852',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  connectionResult: {
+    color: '#516079',
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 5,
   },
   linkWrap: {
     alignItems: 'center',

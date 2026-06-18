@@ -1,42 +1,69 @@
 import React, { Suspense, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 const RealAppRoot = React.lazy(() => import('@/src/startup/RealAppRoot'));
 
+type StartupErrorBoundaryState = {
+  error?: Error;
+};
+
+class StartupErrorBoundary extends React.Component<React.PropsWithChildren, StartupErrorBoundaryState> {
+  state: StartupErrorBoundaryState = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.warn('[startup] app provider load failed', error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <StartupLoadingScreen
+          detail={this.state.error.message || 'Die App konnte gerade nicht geladen werden.'}
+        />
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function StartupLoadingScreen({ detail }: { detail?: string }) {
+  return (
+    <View style={styles.safeStartup}>
+      <ActivityIndicator color="#D4AF37" size="large" />
+      <Text style={styles.title}>Kalendulu startet</Text>
+      {detail ? <Text style={styles.detail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
 export default function RootLayout() {
-  const [loadApp, setLoadApp] = useState(false);
+  const [shouldLoadApp, setShouldLoadApp] = useState(false);
 
   useEffect(() => {
     console.log('[startup] root rendered');
+    const timer = setTimeout(() => {
+      console.log('[startup] loading app providers');
+      setShouldLoadApp(true);
+    }, 0);
+
+    return () => clearTimeout(timer);
   }, []);
 
-  if (!loadApp) {
-    return (
-      <View style={styles.safeStartup}>
-        <Text style={styles.title}>Kalendulu startet</Text>
-        <Pressable
-          onPress={() => {
-            console.log('[startup] loading app providers');
-            setLoadApp(true);
-          }}
-          style={styles.button}
-        >
-          <Text style={styles.buttonText}>Weiter</Text>
-        </Pressable>
-      </View>
-    );
+  if (!shouldLoadApp) {
+    return <StartupLoadingScreen />;
   }
 
   return (
-    <Suspense
-      fallback={
-        <View style={styles.safeStartup}>
-          <ActivityIndicator color="#D4AF37" size="large" />
-        </View>
-      }
-    >
-      <RealAppRoot />
-    </Suspense>
+    <StartupErrorBoundary>
+      <Suspense fallback={<StartupLoadingScreen />}>
+        <RealAppRoot />
+      </Suspense>
+    </StartupErrorBoundary>
   );
 }
 
@@ -45,7 +72,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 18,
+    gap: 14,
     backgroundColor: '#0F172A',
     padding: 24,
   },
@@ -54,18 +81,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: '800',
   },
-  button: {
-    minHeight: 50,
-    minWidth: 140,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 14,
-    backgroundColor: '#D4AF37',
-    paddingHorizontal: 22,
-  },
-  buttonText: {
-    color: '#111827',
-    fontSize: 16,
-    fontWeight: '900',
+  detail: {
+    color: '#CBD5E1',
+    fontSize: 13,
+    lineHeight: 18,
+    maxWidth: 320,
+    textAlign: 'center',
   },
 });
