@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Pressable,
@@ -45,6 +45,8 @@ import {
   validateStudyFileAgainstTier,
   addStudyUsagePages,
   completeStudyProgressStep,
+  createShortStudyLabel,
+  getStudyGoalId,
   type KnowledgeUnit,
   type StudyBuildResult,
   type StudyPlan,
@@ -96,6 +98,8 @@ dayjs.locale('de');
 function logStudyClientStep(stage: string, details?: Record<string, unknown>) {
   console.log('[StudyV2]', stage, details ?? {});
 }
+
+const SHOW_STUDY_DEBUG_STATUS = false;
 
 
 function minutesLabel(minutes: number) {
@@ -160,6 +164,11 @@ function feasibilityTone(plan: StudyPlan): 'success' | 'warning' | 'danger' {
   return 'danger';
 }
 
+function isUserVisibleStudyWarning(warning: string) {
+  return /kostenlose vorschau|premium|upgrade|tag 1/i.test(warning)
+    && !/supabase|datenbank|corpus|processing|worker|request|synchronisierung/i.test(warning);
+}
+
 function rebuildPlanForSessions(plan: StudyPlan, sessions: StudySession[]): StudyPlan {
   const learningMinutes = sessions
     .filter((session) => session.sessionType !== 'review')
@@ -222,10 +231,11 @@ function buildStudyAppBundle(input: {
   const names = unitNameMap(input.units);
 
   const todos: PsycheSuggestedTodo[] = [];
+  const linkedGoalId = getStudyGoalId(input.project.id);
   for (const session of input.plan.sessions) {
     const dayLabel = dayjs(session.scheduledStart).format('DD.MM.YYYY');
     for (const title of session.todoTitles) {
-      const fullTitle = `Lerntag ${dayLabel}: ${title}`;
+      const fullTitle = createShortStudyLabel(title || session.title, session.sessionType === 'review' ? 'Review' : 'Lernen');
       if (input.existingTodoTitles.has(fullTitle)) continue;
       input.existingTodoTitles.add(fullTitle);
       todos.push({
@@ -235,14 +245,16 @@ function buildStudyAppBundle(input: {
         priority: session.sessionType === 'review' ? 'medium' : 'high',
         subcategory: `Lerntag ${dayLabel}`,
         estimatedMinutes: session.estimatedMinutes,
+        linkedGoalId,
+        linkedStudySessionId: session.id,
       });
     }
   }
 
   const calendarBlocks: PsycheSuggestedCalendarBlock[] = input.plan.sessions
-    .filter((session) => !input.existingCalendarTitles.has(`${input.project.title}: ${session.title}`))
+    .filter((session) => !input.existingCalendarTitles.has(createShortStudyLabel(session.title, 'Lernen')))
     .map((session) => {
-      const title = `${input.project.title}: ${session.title}`;
+      const title = createShortStudyLabel(session.title, 'Lernen');
       input.existingCalendarTitles.add(title);
       return {
         id: `study_cal_${session.id}`,
@@ -376,6 +388,18 @@ export default function StudyScreen() {
   const selectedProgressSteps = selectedProject
     ? progressSteps.filter((step) => step.projectId === selectedProject.id)
     : [];
+
+  useEffect(() => {
+    if (!isAnalyzing) return undefined;
+    const interval = setInterval(() => {
+      const current = analysisProgressRef.current;
+      if (current >= 92) return;
+      const next = Math.min(92, current + Math.max(0.6, (92 - current) * 0.035));
+      analysisProgressRef.current = next;
+      setAnalysisProgress(next);
+    }, 650);
+    return () => clearInterval(interval);
+  }, [isAnalyzing]);
 
   const todaySessions = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -1403,7 +1427,7 @@ export default function StudyScreen() {
                 <Pressable onPress={() => void removeAsset(asset)}><Text style={styles.removeText}>Entfernen</Text></Pressable>
               </View>
             ))}
-            {uploadMessages.slice(-3).map((message, index) => (
+            {SHOW_STUDY_DEBUG_STATUS && uploadMessages.slice(-3).map((message, index) => (
               <Text key={`${message}-${index}`} style={styles.warningText}>{message}</Text>
             ))}
               </>
@@ -1432,10 +1456,10 @@ export default function StudyScreen() {
             </Text>
             <Text style={styles.metaText}>{preview.plan.recommendation}</Text>
           </View>
-          {preview.plan.warnings?.map((warning) => (
+          {preview.plan.warnings?.filter(isUserVisibleStudyWarning).map((warning) => (
             <Text key={warning} style={styles.warningText}>{warning}</Text>
           ))}
-          {uploadMessages.slice(-2).map((message, index) => (
+          {SHOW_STUDY_DEBUG_STATUS && uploadMessages.slice(-2).map((message, index) => (
             <Text key={`${message}-${index}`} style={styles.metaText}>{message}</Text>
           ))}
 

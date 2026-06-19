@@ -37,6 +37,12 @@ export function useSubscription() {
     return next;
   }, [user?.id]);
 
+  const applyStatus = useCallback((next: SubscriptionStatus) => {
+    setStatus(next);
+    setLoading(false);
+    return next;
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -66,5 +72,6 @@ export function useSubscription() {
     loading,
     refresh,
     restore,
+    applyStatus,
   };
 }

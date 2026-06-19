@@ -34,6 +34,37 @@ async function cacheStatus(status: SubscriptionStatus) {
   await saveCloudState(STORAGE_KEYS.BILLING_STATUS, status);
 }
 
+function planFromProductId(productId?: string): UserStudyTier {
+  if (
+    productId === REVENUECAT_PRODUCTS.premiumMonthly ||
+    productId === REVENUECAT_PRODUCTS.premiumYearly
+  ) {
+    return 'premium';
+  }
+  if (productId === REVENUECAT_PRODUCTS.plusMonthly) return 'plus';
+  if (productId === REVENUECAT_PRODUCTS.starterMonthly) return 'starter';
+  return 'free';
+}
+
+function strongestPlan(plans: UserStudyTier[]): UserStudyTier {
+  if (plans.includes('premium')) return 'premium';
+  if (plans.includes('plus')) return 'plus';
+  if (plans.includes('starter')) return 'starter';
+  return 'free';
+}
+
+function revenueCatProductIds(customerInfo: CustomerInfo) {
+  const raw = customerInfo as any;
+  return [
+    ...(Array.isArray(customerInfo.activeSubscriptions) ? customerInfo.activeSubscriptions : []),
+    ...(Array.isArray(raw.allPurchasedProductIdentifiers) ? raw.allPurchasedProductIdentifiers : []),
+    ...(Array.isArray(raw.allPurchasedProducts) ? raw.allPurchasedProducts : []),
+    ...Object.values(customerInfo.entitlements.active)
+      .map((entitlement: any) => entitlement?.productIdentifier)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0),
+  ];
+}
+
 function activeProductIdForPlan(customerInfo: CustomerInfo, tier: UserStudyTier) {
   if (tier === 'free') return undefined;
   const entitlementId = tier === 'premium'
@@ -41,11 +72,15 @@ function activeProductIdForPlan(customerInfo: CustomerInfo, tier: UserStudyTier)
     : tier === 'plus'
       ? REVENUECAT_ENTITLEMENT_PLUS
       : REVENUECAT_ENTITLEMENT_STARTER;
-  return customerInfo.entitlements.active[entitlementId]?.productIdentifier;
+  return customerInfo.entitlements.active[entitlementId]?.productIdentifier
+    ?? revenueCatProductIds(customerInfo).find((productId) => planFromProductId(productId) === tier);
 }
 
 function statusFromCustomerInfo(customerInfo: CustomerInfo): SubscriptionStatus {
-  const tier = getActiveKalenduluPlan(customerInfo);
+  const tier = resolvePlanFromCustomerInfo(customerInfo);
+  console.log('[revenuecat] active entitlements', Object.keys(customerInfo.entitlements.active));
+  console.log('[revenuecat] active subscriptions', customerInfo.activeSubscriptions ?? []);
+  console.log('[revenuecat] resolved plan', tier);
   return {
     tier,
     entitlementActive: tier !== 'free',
@@ -53,6 +88,12 @@ function statusFromCustomerInfo(customerInfo: CustomerInfo): SubscriptionStatus 
     checkedAt: new Date().toISOString(),
     source: 'revenuecat',
   };
+}
+
+export async function syncSubscriptionStatusFromCustomerInfo(customerInfo: CustomerInfo): Promise<SubscriptionStatus> {
+  const status = statusFromCustomerInfo(customerInfo);
+  await cacheStatus(status);
+  return status;
 }
 
 async function ensureRevenueCatReady(userId?: string) {
@@ -63,15 +104,18 @@ async function ensureRevenueCatReady(userId?: string) {
 }
 
 export async function getCachedSubscriptionStatus(): Promise<SubscriptionStatus> {
-  const cloud = await loadCloudState<SubscriptionStatus>(STORAGE_KEYS.BILLING_STATUS);
-  if (cloud) return normalizeStatus({ ...cloud, source: 'cache' });
-
-  const raw = await AsyncStorage.getItem(STORAGE_KEYS.BILLING_STATUS);
-  if (!raw) return DEFAULT_STATUS;
+  const [cloud, raw] = await Promise.all([
+    loadCloudState<SubscriptionStatus>(STORAGE_KEYS.BILLING_STATUS),
+    AsyncStorage.getItem(STORAGE_KEYS.BILLING_STATUS),
+  ]);
   try {
-    return normalizeStatus({ ...JSON.parse(raw), source: 'cache' });
+    const local = raw ? normalizeStatus({ ...JSON.parse(raw), source: 'cache' }) : null;
+    const cloudStatus = cloud ? normalizeStatus({ ...cloud, source: 'cache' }) : null;
+    const paid = [local, cloudStatus].find((status) => status && status.tier !== 'free');
+    if (paid) return paid;
+    return cloudStatus ?? local ?? DEFAULT_STATUS;
   } catch {
-    return DEFAULT_STATUS;
+    return cloud ? normalizeStatus({ ...cloud, source: 'cache' }) : DEFAULT_STATUS;
   }
 }
 
@@ -106,24 +150,34 @@ export async function purchaseRevenueCatPackage(packageToPurchase: PurchasesPack
   await ensureRevenueCatReady(userId);
   const Purchases = await getPurchases();
   const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
-  await cacheStatus(statusFromCustomerInfo(customerInfo));
-  return customerInfo;
+  console.log('[revenuecat] purchase success');
+  let resolvedInfo = customerInfo;
+  if (resolvePlanFromCustomerInfo(resolvedInfo) === 'free') {
+    resolvedInfo = await Purchases.getCustomerInfo();
+  }
+  await syncSubscriptionStatusFromCustomerInfo(resolvedInfo);
+  return resolvedInfo;
 }
 
 export async function restoreRevenueCatPurchases(userId?: string): Promise<CustomerInfo> {
   await ensureRevenueCatReady(userId);
   const Purchases = await getPurchases();
   const customerInfo = await Purchases.restorePurchases();
-  await cacheStatus(statusFromCustomerInfo(customerInfo));
+  await syncSubscriptionStatusFromCustomerInfo(customerInfo);
   return customerInfo;
 }
 
-export function getActiveKalenduluPlan(customerInfo: CustomerInfo): UserStudyTier {
+export function resolvePlanFromCustomerInfo(customerInfo: CustomerInfo): UserStudyTier {
   const active = customerInfo.entitlements.active;
   if (active[REVENUECAT_ENTITLEMENT_PREMIUM]?.isActive) return 'premium';
   if (active[REVENUECAT_ENTITLEMENT_PLUS]?.isActive) return 'plus';
   if (active[REVENUECAT_ENTITLEMENT_STARTER]?.isActive) return 'starter';
-  return 'free';
+
+  return strongestPlan(revenueCatProductIds(customerInfo).map(planFromProductId));
+}
+
+export function getActiveKalenduluPlan(customerInfo: CustomerInfo): UserStudyTier {
+  return resolvePlanFromCustomerInfo(customerInfo);
 }
 
 export async function restorePurchases(userId?: string) {

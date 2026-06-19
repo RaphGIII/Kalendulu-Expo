@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase';
 import { loadCloudState, saveCloudState } from '../shared/cloudState';
 import { STORAGE_KEYS } from '../shared/storageKeys';
 import { replaceProjectProgressSteps } from './studyProgress';
+import { syncStudyGoalProgressFromSteps, upsertStudyProgressGoal } from './studyProgressLink';
 import type { KnowledgeUnit, SpacedRepetitionItem, StudyPlan, StudyProject, StudySession, TemporaryStudyAsset } from './types';
 
 const TEMP_TTL_HOURS = 3;
@@ -163,6 +164,7 @@ export async function saveStudyProjectBundle(input: {
     ]),
   ]);
   await replaceProjectProgressSteps(input.project.id, input.plan.sessions);
+  await upsertStudyProgressGoal({ project: input.project, plan: input.plan });
 }
 
 export async function deleteStudyProject(projectId: string) {
@@ -223,7 +225,7 @@ export async function updateStudySession(sessionId: string, updates: Partial<Stu
 
   const progress = await import('./studyProgress');
   const steps = await progress.loadStudyProgressSteps();
-  await progress.saveStudyProgressSteps(steps.map((step) =>
+  const nextSteps = steps.map((step) =>
     step.sessionId === sessionId
       ? {
           ...step,
@@ -234,9 +236,11 @@ export async function updateStudySession(sessionId: string, updates: Partial<Stu
           estimatedMinutes: nextSession.estimatedMinutes,
           status: updates.completed ? 'done' : step.status,
           completedAt: updates.completed ? new Date().toISOString() : step.completedAt,
-        }
+      }
       : step,
-  ));
+  );
+  await progress.saveStudyProgressSteps(nextSteps);
+  await syncStudyGoalProgressFromSteps(session.projectId, nextSteps);
   return loadStudyData();
 }
 

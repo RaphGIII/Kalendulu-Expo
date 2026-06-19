@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 
 import type { KnowledgeUnit, StudyBuildResult, StudyPlan, StudyProject, StudySession, SpacedRepetitionItem, StudyTargetLevel } from './types';
 import type { StudyDayV2, StudyLearningSlotV2, StudyLearningUnitV2 } from './studyV2Client';
+import { createShortStudyLabel } from './shortStudyLabel';
 
 function toDifficulty(value: number): 1 | 2 | 3 | 4 | 5 {
   return Math.max(1, Math.min(5, Math.round(value || 3))) as 1 | 2 | 3 | 4 | 5;
@@ -37,16 +38,17 @@ function unitToKnowledgeUnit(unit: StudyLearningUnitV2): KnowledgeUnit {
 function slotToSession(slot: StudyLearningSlotV2, day: StudyDayV2, offsetMinutes: number): StudySession {
   const start = slot.scheduledStart ? new Date(slot.scheduledStart) : makeDateTime(day.date, offsetMinutes);
   const end = slot.scheduledEnd ? new Date(slot.scheduledEnd) : new Date(start.getTime() + slot.estimatedMinutes * 60 * 1000);
+  const shortTitle = createShortStudyLabel(slot.title, slot.slotType === 'review' ? 'Wiederholen' : 'Lernen');
   return {
     id: slot.id,
     projectId: slot.projectId,
-    title: slot.title,
+    title: shortTitle,
     sessionType: slot.slotType === 'review' ? 'review' : 'learn',
     scheduledStart: start.toISOString(),
     scheduledEnd: end.toISOString(),
     estimatedMinutes: slot.estimatedMinutes,
     unitIds: slot.unitIds,
-    todoTitles: [slot.title],
+    todoTitles: [shortTitle],
     note: slot.bullets.join('\n'),
     completed: slot.completed,
     updatedAt: new Date().toISOString(),

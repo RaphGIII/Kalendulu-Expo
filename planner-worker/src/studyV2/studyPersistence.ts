@@ -52,6 +52,12 @@ async function supabaseRequest(env: StudyV2Env, path: string, init: RequestInit)
   return text ? JSON.parse(text) : null;
 }
 
+function dbTierSnapshot(value: string) {
+  if (value === 'plus') return 'plus';
+  if (value === 'premium' || value === 'premium_monthly' || value === 'premium_yearly') return 'premium';
+  return 'free';
+}
+
 function dbProject(project: StudyProjectV2) {
   return {
     id: project.id,
@@ -61,7 +67,7 @@ function dbProject(project: StudyProjectV2) {
     target_level: project.targetLevel,
     weekly_hours: project.weeklyHours,
     minutes_per_learning_day: project.minutesPerLearningDay,
-    tier_snapshot: project.tierSnapshot,
+    tier_snapshot: dbTierSnapshot(project.tierSnapshot),
     status: project.status,
     created_at: project.createdAt,
     updated_at: project.updatedAt,
@@ -174,9 +180,10 @@ export async function saveIngestedStudy(input: {
     await supabaseRequest(input.env, 'study_v2_corpus_documents', { method: 'POST', body: JSON.stringify(dbCorpus(input.corpus)) });
     return { persisted: true, warning: undefined };
   } catch (error: any) {
+    console.log('[study-v2] Supabase ingest persistence failed', error?.message ?? error);
     return {
       persisted: false,
-      warning: `Lokal gespeichert, Datenbank nicht verfuegbar. ${String(error?.message ?? '').slice(0, 120)}`,
+      warning: 'Der Lernplan wurde erstellt. Die Synchronisierung wird spaeter erneut versucht.',
     };
   }
 }
@@ -203,9 +210,10 @@ export async function saveProcessingReport(env: StudyV2Env, report: StudyProcess
     });
     return { persisted: true, warning: undefined };
   } catch (error: any) {
+    console.log('[study-v2] Supabase processing report persistence failed', error?.message ?? error);
     return {
       persisted: false,
-      warning: `ProcessingReport nicht in Supabase gespeichert. ${String(error?.message ?? '').slice(0, 120)}`,
+      warning: 'Der Lernplan wurde erstellt. Die Synchronisierung wird spaeter erneut versucht.',
     };
   }
 }
@@ -261,9 +269,10 @@ export async function saveGeneratedPlan(input: {
     });
     return { persisted: true, warning: undefined };
   } catch (error: any) {
+    console.log('[study-v2] Supabase plan persistence failed', error?.message ?? error);
     return {
       persisted: false,
-      warning: `Lernplan lokal im Worker gehalten, Datenbank nicht verfuegbar. ${String(error?.message ?? '').slice(0, 120)}`,
+      warning: 'Der Lernplan wurde erstellt. Die Synchronisierung wird spaeter erneut versucht.',
     };
   }
 }
@@ -317,6 +326,7 @@ export async function deleteProjectBundle(env: StudyV2Env, user: AuthUser, proje
     );
     return { ok: true, warning: undefined };
   } catch (error: any) {
-    return { ok: true, warning: `Projekt lokal geloescht; Datenbank-Loeschung nicht bestaetigt. ${String(error?.message ?? '').slice(0, 120)}` };
+    console.log('[study-v2] Supabase delete persistence failed', error?.message ?? error);
+    return { ok: true, warning: 'Das Projekt wurde lokal geloescht. Die Synchronisierung wird spaeter erneut versucht.' };
   }
 }

@@ -6,6 +6,7 @@ import type { Category, Task, TaskPriority, TodoState } from './types';
 import { cancelReminder, scheduleTaskReminder } from './notifications';
 import { loadCloudState, saveCloudState } from '../shared/cloudState';
 import { STORAGE_KEYS } from '../shared/storageKeys';
+import { syncLinkedGoalProgressFromTodos } from '../study/studyProgressLink';
 
 const TODO_STORAGE_KEY = STORAGE_KEYS.TODO;
 
@@ -241,9 +242,8 @@ export function useTodo() {
       await cancelReminder(task.reminderId);
     }
 
-    setState((current) => ({
-      ...current,
-      tasks: current.tasks.map((item) => {
+    setState((current) => {
+      const nextTasks = current.tasks.map((item) => {
         if (item.id !== taskId) return item;
 
         return {
@@ -253,8 +253,13 @@ export function useTodo() {
           reminderEnabled: nextDone ? false : item.reminderEnabled,
           reminderId: nextDone ? null : item.reminderId,
         };
-      }),
-    }));
+      });
+      void syncLinkedGoalProgressFromTodos(nextTasks);
+      return {
+        ...current,
+        tasks: nextTasks,
+      };
+    });
   };
 
   const deleteTask = async (taskId: string) => {

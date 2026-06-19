@@ -53,7 +53,7 @@ export type TodoLikeTask = {
   reminderEnabled?: boolean;
   reminderId?: string | null;
   note?: string;
-  subcategory?: string;
+  subcategory?: string | null;
   priority?: 'low' | 'medium' | 'high';
   [key: string]: unknown;
 };

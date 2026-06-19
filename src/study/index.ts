@@ -12,5 +12,7 @@ export * from './studyPlanCompiler';
 export * from './studyMaterialExtraction';
 export * from './pageLearningExtraction';
 export * from './studyProgress';
+export * from './studyProgressLink';
 export * from './studyUsage';
 export * from './studyLimitGuards';
+export * from './shortStudyLabel';

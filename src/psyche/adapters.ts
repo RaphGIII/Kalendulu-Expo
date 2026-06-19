@@ -113,6 +113,8 @@ function createTodoTaskFromSuggestion(item: PsycheSuggestedTodo): TodoLikeTask {
     note: item.note ?? item.details ?? item.reason,
     subcategory: item.subcategory,
     priority: item.priority ?? 'medium',
+    linkedGoalId: typeof item.linkedGoalId === 'string' ? item.linkedGoalId : null,
+    linkedStudySessionId: typeof item.linkedStudySessionId === 'string' ? item.linkedStudySessionId : undefined,
   };
 }
 

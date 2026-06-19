@@ -3,6 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { loadCloudState, saveCloudState } from '../shared/cloudState';
 import { STORAGE_KEYS } from '../shared/storageKeys';
 import { updateAfterReview } from './spacedRepetition';
+import { syncStudyGoalProgressFromSteps } from './studyProgressLink';
 import type { SpacedRepetitionItem, StudyProgressStep, StudySession } from './types';
 
 function uid(prefix: string) {
@@ -64,6 +65,7 @@ export async function replaceProjectProgressSteps(projectId: string, sessions: S
     ...current.filter((step) => step.projectId !== projectId),
   ];
   await saveStudyProgressSteps(next);
+  await syncStudyGoalProgressFromSteps(projectId, next);
   return next;
 }
 
@@ -85,9 +87,10 @@ export async function completeStudyProgressStep(input: {
         }
       : step,
   );
-  await saveStudyProgressSteps(next);
-
   const step = current.find((item) => item.id === input.stepId);
+  await saveStudyProgressSteps(next);
+  if (step?.projectId) await syncStudyGoalProgressFromSteps(step.projectId, next);
+
   const repetitionItems = input.repetitionItems;
   if (step?.stepType === 'review' && step.unitId && repetitionItems && typeof input.qualityScore === 'number') {
     return repetitionItems.map((item) =>

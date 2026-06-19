@@ -1,23 +1,30 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import type { PurchasesPackage } from 'react-native-purchases';
+import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 
 import { useAuth } from '../auth/AuthProvider';
 import { useAppTheme } from '../theme/ThemeProvider';
 import {
+  configureRevenueCat,
+  getPurchases,
   getActiveKalenduluPlan,
   getRevenueCatOffering,
+  getRevenueCatClientDebugInfo,
   openSubscriptionManagement,
   purchaseRevenueCatPackage,
   purchaseRevenueCatProduct,
   REVENUECAT_PRODUCTS,
-  restorePurchases,
+  resolvePlanFromCustomerInfo,
+  restoreRevenueCatPurchases,
+  syncSubscriptionStatusFromCustomerInfo,
   tierFromProduct,
   useSubscription,
 } from './index';
 import type { UserStudyTier } from './types';
+
+const SHOW_REVENUECAT_DEBUG = true;
 
 type PremiumPlan = {
   id: string;
@@ -32,6 +39,72 @@ type PremiumPlan = {
   features: string[];
   tone: 'free' | 'starter' | 'plus' | 'premium' | 'yearly';
 };
+
+type RevenueCatDebugState = {
+  configured: boolean;
+  platform: string;
+  iosKeyPresent: boolean;
+  iosKeyPrefixValid: boolean;
+  supabaseUserIdPresent: boolean;
+  appUserId?: string;
+  originalAppUserId?: string;
+  offeringsLoaded: boolean;
+  currentOfferingId?: string;
+  packageIdentifiers: string[];
+  productIdentifiers: string[];
+  activeEntitlementKeys: string[];
+  activeSubscriptions: string[];
+  purchasedProductIdentifiers: string[];
+  resolvedPlan: UserStudyTier;
+  lastPurchaseResult?: string;
+  lastRestoreResult?: string;
+  lastErrorMessage?: string;
+};
+
+function stringifyList(items: string[]) {
+  return items.length ? items.join(', ') : '-';
+}
+
+function purchasedProductsFromCustomerInfo(customerInfo: CustomerInfo) {
+  const raw = customerInfo as any;
+  return [
+    ...(Array.isArray(raw.allPurchasedProductIdentifiers) ? raw.allPurchasedProductIdentifiers : []),
+    ...(Array.isArray(raw.allPurchasedProducts) ? raw.allPurchasedProducts : []),
+  ].filter((item, index, array): item is string => typeof item === 'string' && item.length > 0 && array.indexOf(item) === index);
+}
+
+function debugFromCustomerInfo(customerInfo: CustomerInfo, previous: RevenueCatDebugState): RevenueCatDebugState {
+  return {
+    ...previous,
+    appUserId: (customerInfo as any).appUserID ?? previous.appUserId,
+    originalAppUserId: customerInfo.originalAppUserId,
+    activeEntitlementKeys: Object.keys(customerInfo.entitlements.active),
+    activeSubscriptions: customerInfo.activeSubscriptions ?? [],
+    purchasedProductIdentifiers: purchasedProductsFromCustomerInfo(customerInfo),
+    resolvedPlan: resolvePlanFromCustomerInfo(customerInfo),
+  };
+}
+
+function createInitialDebugState(userId?: string): RevenueCatDebugState {
+  const client = getRevenueCatClientDebugInfo();
+  return {
+    configured: client.configured,
+    platform: Platform.OS,
+    iosKeyPresent: client.iosKeyPresent,
+    iosKeyPrefixValid: client.iosKeyPrefixValid,
+    supabaseUserIdPresent: Boolean(userId),
+    appUserId: client.configuredUserId,
+    originalAppUserId: undefined,
+    offeringsLoaded: false,
+    currentOfferingId: undefined,
+    packageIdentifiers: [],
+    productIdentifiers: [],
+    activeEntitlementKeys: [],
+    activeSubscriptions: [],
+    purchasedProductIdentifiers: [],
+    resolvedPlan: 'free',
+  };
+}
 
 const PLANS: PremiumPlan[] = [
   {
@@ -159,6 +232,7 @@ export default function PremiumScreen() {
   const [busyPlan, setBusyPlan] = useState<string | null>(null);
   const [offeringPackages, setOfferingPackages] = useState<PurchasesPackage[] | null>(null);
   const [offeringError, setOfferingError] = useState<string | null>(null);
+  const [revenueCatDebug, setRevenueCatDebug] = useState<RevenueCatDebugState>(() => createInitialDebugState(user?.id));
   const styles = useMemo(() => makeStyles(colors, fontFamily), [colors, fontFamily]);
   const displayedPlans = useMemo(() => {
     if (!offeringPackages?.length) return PLANS;
@@ -176,17 +250,68 @@ export default function PremiumScreen() {
         if (!mounted) return;
         setOfferingPackages(offering.availablePackages);
         setOfferingError(null);
+        setRevenueCatDebug((current) => ({
+          ...current,
+          ...createInitialDebugState(user?.id),
+          offeringsLoaded: true,
+          currentOfferingId: offering.identifier,
+          packageIdentifiers: offering.availablePackages.map((item) => item.identifier),
+          productIdentifiers: offering.availablePackages.map((item) => item.product.identifier),
+        }));
       })
       .catch((error: any) => {
         if (!mounted) return;
         setOfferingPackages(null);
         setOfferingError(error?.message ?? 'RevenueCat Offering konnte nicht geladen werden.');
+        setRevenueCatDebug((current) => ({
+          ...current,
+          ...createInitialDebugState(user?.id),
+          offeringsLoaded: false,
+          lastErrorMessage: error?.message ?? 'RevenueCat Offering konnte nicht geladen werden.',
+        }));
       });
 
     return () => {
       mounted = false;
     };
   }, [user?.id]);
+
+  async function applyCustomerInfo(customerInfo: CustomerInfo, resultKey?: 'lastPurchaseResult' | 'lastRestoreResult') {
+    const status = await syncSubscriptionStatusFromCustomerInfo(customerInfo);
+    subscription.applyStatus(status);
+    setRevenueCatDebug((current) => ({
+      ...debugFromCustomerInfo(customerInfo, current),
+      configured: getRevenueCatClientDebugInfo().configured,
+      supabaseUserIdPresent: Boolean(user?.id),
+      [resultKey ?? 'lastPurchaseResult']: `resolved=${status.tier}, active=${status.entitlementActive ? 'yes' : 'no'}, product=${status.productId ?? '-'}`,
+      lastErrorMessage: undefined,
+    }));
+    return status;
+  }
+
+  async function inspectRevenueCat() {
+    setBusyPlan('debug');
+    try {
+      const configured = await configureRevenueCat(user?.id);
+      if (!configured) throw new Error('RevenueCat konnte nicht konfiguriert werden.');
+      const Purchases = await getPurchases();
+      if (user?.id) await Purchases.logIn(user.id);
+      const customerInfo = await Purchases.getCustomerInfo();
+      const status = await applyCustomerInfo(customerInfo, 'lastPurchaseResult');
+      if (status.tier !== 'free') {
+        Alert.alert('RevenueCat geprüft', `Aktiver Plan: ${status.tier}`);
+      }
+    } catch (error: any) {
+      setRevenueCatDebug((current) => ({
+        ...current,
+        ...createInitialDebugState(user?.id),
+        lastErrorMessage: error?.message ?? String(error),
+      }));
+      Alert.alert('RevenueCat pruefen', error?.message ?? 'Pruefung fehlgeschlagen.');
+    } finally {
+      setBusyPlan(null);
+    }
+  }
 
   async function buy(plan: PremiumPlan) {
     if (!plan.productId) return;
@@ -195,8 +320,13 @@ export default function PremiumScreen() {
       if (plan.packageToPurchase) {
         const customerInfo = await purchaseRevenueCatPackage(plan.packageToPurchase, user?.id);
         const activePlan = getActiveKalenduluPlan(customerInfo);
-        await subscription.refresh();
-        Alert.alert('Premium aktiv', activePlan === 'free' ? 'Der Kauf wurde verarbeitet, aber kein aktives Entitlement gefunden.' : `Dein Plan wurde auf ${activePlan} aktualisiert.`);
+        const nextStatus = await applyCustomerInfo(customerInfo, 'lastPurchaseResult');
+        Alert.alert(
+          'Premium aktiv',
+          nextStatus.tier === 'free'
+            ? 'Kauf abgeschlossen, aber kein aktiver Tarif gefunden. Bitte versuche "Kaeufe wiederherstellen".'
+            : `Dein Plan wurde auf ${activePlan} aktualisiert.`,
+        );
       } else {
         const result = await purchaseRevenueCatProduct(plan.productId, user?.id);
         if (!result.configured) {
@@ -208,6 +338,7 @@ export default function PremiumScreen() {
       }
     } catch (error: any) {
       if (error?.userCancelled) return;
+      setRevenueCatDebug((current) => ({ ...current, lastErrorMessage: error?.message ?? String(error) }));
       Alert.alert('Premium', 'Der Kauf konnte gerade nicht abgeschlossen werden. Bitte versuche es spaeter erneut.');
     } finally {
       setBusyPlan(null);
@@ -217,10 +348,11 @@ export default function PremiumScreen() {
   async function restore() {
     setBusyPlan('restore');
     try {
-      await restorePurchases(user?.id);
-      await subscription.refresh();
-      Alert.alert('Kaeufe wiederhergestellt', 'Dein Abo-Status wurde aktualisiert.');
-    } catch {
+      const customerInfo = await restoreRevenueCatPurchases(user?.id);
+      const status = await applyCustomerInfo(customerInfo, 'lastRestoreResult');
+      Alert.alert('Kaeufe wiederhergestellt', `Aktiver Plan: ${status.tier}`);
+    } catch (error: any) {
+      setRevenueCatDebug((current) => ({ ...current, lastErrorMessage: error?.message ?? String(error) }));
       Alert.alert('Kaeufe wiederherstellen', 'Die Wiederherstellung konnte gerade nicht abgeschlossen werden.');
     } finally {
       setBusyPlan(null);
@@ -303,6 +435,35 @@ export default function PremiumScreen() {
         </View>
 
         <View style={styles.footerActions}>
+          {SHOW_REVENUECAT_DEBUG ? (
+            <View style={styles.debugPanel}>
+              <Text style={styles.debugTitle}>RevenueCat Debug</Text>
+              <Text style={styles.debugLine}>RevenueCat configured: {revenueCatDebug.configured ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>Platform: {revenueCatDebug.platform}</Text>
+              <Text style={styles.debugLine}>iOS SDK key present: {revenueCatDebug.iosKeyPresent ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>iOS SDK key prefix valid: {revenueCatDebug.iosKeyPrefixValid ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>Supabase user.id present: {revenueCatDebug.supabaseUserIdPresent ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>RevenueCat app user id: {revenueCatDebug.appUserId ?? '-'}</Text>
+              <Text style={styles.debugLine}>originalAppUserId: {revenueCatDebug.originalAppUserId ?? '-'}</Text>
+              <Text style={styles.debugLine}>offerings loaded: {revenueCatDebug.offeringsLoaded ? 'yes' : 'no'}</Text>
+              <Text style={styles.debugLine}>current offering id: {revenueCatDebug.currentOfferingId ?? '-'}</Text>
+              <Text style={styles.debugLine}>package identifiers: {stringifyList(revenueCatDebug.packageIdentifiers)}</Text>
+              <Text style={styles.debugLine}>product identifiers: {stringifyList(revenueCatDebug.productIdentifiers)}</Text>
+              <Text style={styles.debugLine}>active entitlement keys: {stringifyList(revenueCatDebug.activeEntitlementKeys)}</Text>
+              <Text style={styles.debugLine}>activeSubscriptions: {stringifyList(revenueCatDebug.activeSubscriptions)}</Text>
+              <Text style={styles.debugLine}>purchased products: {stringifyList(revenueCatDebug.purchasedProductIdentifiers)}</Text>
+              <Text style={styles.debugLine}>resolvedPlan: {revenueCatDebug.resolvedPlan}</Text>
+              <Text style={styles.debugLine}>last purchase result: {revenueCatDebug.lastPurchaseResult ?? '-'}</Text>
+              <Text style={styles.debugLine}>last restore result: {revenueCatDebug.lastRestoreResult ?? '-'}</Text>
+              <Text style={styles.debugLine}>last error message: {revenueCatDebug.lastErrorMessage ?? '-'}</Text>
+              <Pressable onPress={() => void inspectRevenueCat()} disabled={busyPlan !== null} style={styles.secondaryAction}>
+                <Text style={styles.secondaryActionText}>{busyPlan === 'debug' ? 'Wird geprueft...' : 'RevenueCat pruefen'}</Text>
+              </Pressable>
+              <Pressable onPress={() => void restore()} disabled={busyPlan !== null} style={styles.secondaryAction}>
+                <Text style={styles.secondaryActionText}>{busyPlan === 'restore' ? 'Wird geprueft...' : 'Kaeufe wiederherstellen'}</Text>
+              </Pressable>
+            </View>
+          ) : null}
           <Pressable onPress={() => void restore()} disabled={busyPlan !== null} style={styles.secondaryAction}>
             <Text style={styles.secondaryActionText}>{busyPlan === 'restore' ? 'Wird geprueft...' : 'Kaeufe wiederherstellen'}</Text>
           </Pressable>
@@ -352,5 +513,8 @@ function makeStyles(
     footerActions: { gap: 10, marginTop: 4 },
     secondaryAction: { minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
     secondaryActionText: { color: colors.text, fontWeight: '900', fontFamily: fontFamily.bold },
+    debugPanel: { borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.cardSecondary, padding: 12, gap: 8 },
+    debugTitle: { color: colors.text, fontSize: 16, fontWeight: '900', fontFamily: fontFamily.bold },
+    debugLine: { color: colors.textMuted, fontSize: 12, lineHeight: 17, fontFamily: fontFamily.regular },
   });
 }

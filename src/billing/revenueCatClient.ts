@@ -52,6 +52,20 @@ export function hasRevenueCatConfig() {
   return Boolean(getPlatformRevenueCatApiKey());
 }
 
+export function getRevenueCatClientDebugInfo() {
+  const iosKey = IOS_API_KEY?.trim();
+  const androidKey = ANDROID_API_KEY?.trim();
+  return {
+    configured,
+    configuredUserId,
+    platform: Platform.OS,
+    iosKeyPresent: Boolean(iosKey),
+    iosKeyPrefixValid: Boolean(iosKey?.startsWith('appl_')),
+    androidKeyPresent: Boolean(androidKey),
+    androidKeyPrefixValid: Boolean(androidKey?.startsWith('goog_')),
+  };
+}
+
 export async function configureRevenueCat(userId?: string) {
   const apiKey = getPlatformRevenueCatApiKey();
   if (!apiKey) return false;
