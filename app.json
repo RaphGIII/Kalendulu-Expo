@@ -12,7 +12,7 @@
       "supportsTablet": true,
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.kalendulu.app",
-      "buildNumber": "8",
+      "buildNumber": "11",
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "Kalendulu verwendet den Zugriff auf deine Fotos nur, wenn du ein Profilbild auswählen möchtest.",
         "ITSAppUsesNonExemptEncryption": false

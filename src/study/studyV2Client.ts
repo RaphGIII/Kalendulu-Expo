@@ -165,6 +165,8 @@ export async function ingestStudyV2(input: {
   weeklyHours: number;
   minutesPerLearningDay: number;
   tier: StudyV2Tier;
+  previewMode?: boolean;
+  maxPages?: number;
 }) {
   const form = new FormData();
   form.append('title', input.title);
@@ -173,6 +175,8 @@ export async function ingestStudyV2(input: {
   form.append('weeklyHours', String(input.weeklyHours));
   form.append('minutesPerLearningDay', String(input.minutesPerLearningDay));
   form.append('tier', input.tier);
+  form.append('previewMode', input.previewMode ? 'true' : 'false');
+  if (input.maxPages) form.append('maxPages', String(input.maxPages));
 
   for (const file of input.files) {
     form.append('files', {

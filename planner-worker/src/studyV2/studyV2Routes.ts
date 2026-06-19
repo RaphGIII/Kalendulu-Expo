@@ -107,16 +107,22 @@ function tierLimits(tier: StudyV2Tier, readyProjectCount: number) {
     maxBytes: Number.MAX_SAFE_INTEGER,
     ocrAllowed: limit.ocrAllowed,
     multipleFilesAllowed: true,
-    canCreateProject: tier === 'free_demo' ? readyProjectCount < 1 : readyProjectCount < limit.activeProjectLimit,
+    canCreateProject: tier === 'free_demo' ? true : readyProjectCount < limit.activeProjectLimit,
     activeProjectLimit: limit.activeProjectLimit,
     pageLimit: limit.freeSamplePages ?? limit.pagesPerMonth,
   };
 }
 
-function applyStudySampleLimit(extracted: Awaited<ReturnType<typeof extractByType>>, tier: StudyV2Tier, fileType: StudyV2FileType) {
+function applyStudySampleLimit(
+  extracted: Awaited<ReturnType<typeof extractByType>>,
+  tier: StudyV2Tier,
+  fileType: StudyV2FileType,
+  previewMode: boolean,
+  maxPages?: number,
+) {
   const limit = getStudyPlanLimit(tier);
-  if (tier !== 'free_demo') return { extracted, pagesProcessed: undefined, demoLimited: false };
-  const samplePages = limit.freeSamplePages ?? 20;
+  if (tier !== 'free_demo' && !previewMode) return { extracted, pagesProcessed: undefined, demoLimited: false };
+  const samplePages = Math.max(1, Math.min(20, Math.round(maxPages || limit.freeSamplePages || 5)));
   const approxChars = samplePages * 2600;
   const lines = extracted.text.split('\n');
   let pageMarkers = 0;
@@ -135,7 +141,7 @@ function applyStudySampleLimit(extracted: Awaited<ReturnType<typeof extractByTyp
       text: sampledText,
       warnings: [
         ...extracted.warnings,
-        'Demo-Modus: Es wurden nur die ersten 5 Seiten verarbeitet. Upgrade verarbeitet das gesamte Dokument.',
+        `Kostenlose Vorschau: Es wurden nur die ersten ${samplePages} Seiten/Folien analysiert. Für den vollständigen Lernplan benötigst du ein Upgrade.`,
       ],
     },
     pagesProcessed: samplePages,
@@ -158,6 +164,8 @@ async function extractStudyFile(input: {
   projectId: string;
   userId: string;
   tier: StudyV2Tier;
+  previewMode: boolean;
+  maxPages?: number;
   ocrProvider: OcrProvider;
   requestId: string;
 }): Promise<ExtractedStudyFile> {
@@ -173,7 +181,7 @@ async function extractStudyFile(input: {
     details: { fileType: input.fileType, fileSizeBytes: input.file.size },
   });
   const extractedFull = await extractByType(input.file, input.fileType);
-  const sampled = applyStudySampleLimit(extractedFull, input.tier, input.fileType);
+  const sampled = applyStudySampleLimit(extractedFull, input.tier, input.fileType, input.previewMode, input.maxPages);
   const extracted = sampled.extracted;
   const warnings = [...extracted.warnings];
   let rawText = extracted.text;
@@ -182,7 +190,7 @@ async function extractStudyFile(input: {
   let pagesProcessed = sampled.pagesProcessed ?? 0;
 
   if (extracted.ocrNeeded && input.tier === 'free_demo') {
-    warnings.push('Demo-Modus: OCR fuer gescannte Inhalte wurde nicht auf das gesamte Dokument angewendet. Upgrade verarbeitet das vollstaendige Dokument mit OCR.');
+    warnings.push('Kostenlose Vorschau: Gescannte Inhalte wurden aus Kostenschutz nicht vollständig per OCR verarbeitet. Für den vollständigen Lernplan benötigst du ein Upgrade.');
     logStudyStep({
       requestId: input.requestId,
       projectId: input.projectId,
@@ -416,6 +424,8 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   const weeklyHours = Math.max(1, Number(form.get('weeklyHours') ?? 8));
   const minutesPerLearningDay = Math.max(20, Number(form.get('minutesPerLearningDay') ?? 90));
   const tier = safeTier(form.get('tier'));
+  const previewMode = tier === 'free_demo' || String(form.get('previewMode') ?? '').toLowerCase() === 'true';
+  const maxPages = Math.max(1, Math.min(20, Number(form.get('maxPages') ?? getStudyPlanLimit(tier).freeSamplePages ?? 5)));
   const projectId = String(form.get('projectId') ?? '') || crypto.randomUUID();
   const ocrProvider = (env.OCR_PROVIDER || 'none') as OcrProvider;
   const readyProjectCount = await countReadyProjects(env, user);
@@ -439,7 +449,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     stage: 'files_received',
     status: files.length ? 'success' : 'error',
     message: `${files.length} Dateien empfangen.`,
-    details: { fileCount: files.length, totalBytes, fileNames: files.map((file) => file.name), fileTypes },
+    details: { fileCount: files.length, totalBytes, fileNames: files.map((file) => file.name), fileTypes, previewMode, maxPages },
   });
 
   updateReport(report, step('files', 'Dateien angenommen', files.length ? 'success' : 'error', `${files.length} Dateien · ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} MB`, {
@@ -543,6 +553,8 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
       projectId,
       userId: user.id,
       tier,
+      previewMode,
+      maxPages,
       ocrProvider,
       requestId,
     }));
@@ -609,7 +621,13 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     }, {}),
     preview: cleanedText.slice(0, 600),
   }));
-  if (cleanedTextCharacters < 40) return fail('Aus den Dateien konnte kein verwertbarer Lerntext extrahiert werden.', 422, extractionWarnings);
+  if (cleanedTextCharacters < 40) {
+    const sourceTypes = new Set(extracted.map((item) => item.sourceFile.fileType));
+    if (sourceTypes.has('pptx')) {
+      return fail('Aus dieser PowerPoint konnten keine lesbaren Texte extrahiert werden. Bitte lade eine textbasierte PDF, DOCX oder PPTX mit auswählbarem Text hoch.', 422, extractionWarnings);
+    }
+    return fail('Aus den Dateien konnte kein verwertbarer Lerntext extrahiert werden. Bitte lade eine Datei mit auswählbarem Text hoch.', 422, extractionWarnings);
+  }
   updateReport(report, step('raw-text', 'Gesamttext speichern', 'success', 'Bereinigter Gesamttext wurde fuer die Zusammenfassung vorbereitet.', {
     rawTextCharactersProcessed,
     cleanedTextCharacters,
@@ -629,6 +647,8 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     fileCount: extracted.length,
     totalBytes,
     sourceTypes: Array.from(new Set(extracted.map((item) => item.sourceFile.fileType))),
+    previewMode,
+    maxPages: previewMode ? maxPages : undefined,
     rawTextCharactersProcessed,
     cleanedTextCharacters,
     summaryCharacters: 0,

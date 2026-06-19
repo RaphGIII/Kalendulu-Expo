@@ -85,7 +85,7 @@ export function buildStudyResultFromV2(input: {
   };
   const units = input.units.map(unitToKnowledgeUnit);
   const sessions: StudySession[] = [];
-  const isFreeDemo = input.warnings.some((warning) => /Demo-Modus|Upgrade erforderlich/i.test(warning));
+  const isFreeDemo = input.warnings.some((warning) => /Demo-Modus|Kostenlose Vorschau|Upgrade erforderlich/i.test(warning));
   const visibleDays = input.days;
   const unlockedDate = isFreeDemo ? input.days[0]?.date : undefined;
   const lockedSessionIds: string[] = [];
@@ -129,11 +129,11 @@ export function buildStudyResultFromV2(input: {
     sessions: sessions.sort((a, b) => a.scheduledStart.localeCompare(b.scheduledStart)),
     repetitionItems,
     warnings: isFreeDemo
-      ? [...input.warnings, 'Free Demo: Tag 1 ist freigeschaltet. Upgrade schaltet den vollstaendigen Lernplan frei.']
+      ? [...input.warnings, 'Kostenlose Vorschau: Tag 1 ist freigeschaltet. Premium schaltet den vollständigen Lernplan frei.']
       : input.warnings,
     lockedSessionIds: isFreeDemo ? lockedSessionIds : undefined,
     lockedReason: isFreeDemo
-      ? 'Wenn du den vollstaendigen Lernplan angezeigt bekommen willst, steige auf Premium um.'
+      ? 'Wenn du den vollständigen Lernplan angezeigt bekommen willst, steige auf Premium um.'
       : undefined,
   };
 

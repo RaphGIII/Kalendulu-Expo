@@ -40,7 +40,7 @@ export const STUDY_PLAN_LIMITS: Record<StudyBillingPlan, StudyPlanLimit> = {
     exportLevel: 'none',
     includedRegenerationsPerMonth: 0,
     upgradeMessage:
-      'Upgrade erforderlich, um den vollstaendigen Lernplan und die Verarbeitung des gesamten Dokuments freizuschalten.',
+      'Upgrade erforderlich, um den vollständigen Lernplan und die Verarbeitung des gesamten Dokuments freizuschalten.',
   },
   starter: {
     id: 'starter',
@@ -83,7 +83,7 @@ export const STUDY_PLAN_LIMITS: Record<StudyBillingPlan, StudyPlanLimit> = {
   },
   premium_yearly: {
     id: 'premium_yearly',
-    label: 'Premium Jaehlich',
+    label: 'Premium Jährlich',
     priceEur: 29.99,
     billingPeriod: 'year',
     monthlyApiBudgetEur: 0.74,

@@ -39,12 +39,14 @@ export default function RegisterScreen() {
   const [busy, setBusy] = useState<'email' | null>(null);
 
   const authErrorMessage = (error: any) => {
-    if (!error) return 'Unbekannter Fehler.';
-    const parts = [
-      error.name ? String(error.name) : '',
-      error.message ? String(error.message) : String(error),
-    ].filter(Boolean);
-    return parts.join(': ');
+    const message = String(error?.message ?? error ?? '').toLowerCase();
+    if (message.includes('already registered') || message.includes('already exists')) {
+      return 'Für diese E-Mail-Adresse existiert bereits ein Konto.';
+    }
+    if (message.includes('network') || message.includes('fetch')) {
+      return 'Registrierung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.';
+    }
+    return 'Registrierung fehlgeschlagen. Bitte prüfe deine Angaben und versuche es erneut.';
   };
 
   const onRegister = async () => {
@@ -62,6 +64,7 @@ export default function RegisterScreen() {
       setBusy('email');
       await signUp({ fullName, email, password });
     } catch (error: any) {
+      console.warn('Email registration failed:', error);
       Alert.alert('Registrierung fehlgeschlagen', authErrorMessage(error));
     } finally {
       setBusy(null);

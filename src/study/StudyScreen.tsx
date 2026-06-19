@@ -554,6 +554,23 @@ export default function StudyScreen() {
       maxSessionMinutes: Math.max(25, Math.min(60, minutesPerLearningDay)),
     };
 
+    function friendlyStudyError(error: any) {
+      const message = String(error?.message ?? error ?? '').toLowerCase();
+      if (message.includes('powerpoint') || message.includes('pptx')) {
+        return 'Aus dieser PowerPoint konnten keine lesbaren Texte extrahiert werden. Bitte lade eine PPTX mit auswählbarem Text hoch.';
+      }
+      if (message.includes('network') || message.includes('fetch')) {
+        return 'Die Verbindung zur Lernplan-Erstellung ist fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.';
+      }
+      if (message.includes('verwertbarer lerntext') || message.includes('lesbaren texte')) {
+        return error?.message ?? 'Aus der Datei konnte kein verwertbarer Lerntext extrahiert werden.';
+      }
+      if (message.includes('limit') || message.includes('upgrade')) {
+        return 'Für diese Aktion ist ein Upgrade erforderlich. Die kostenlose Vorschau verarbeitet nur die ersten Inhalte deiner Datei.';
+      }
+      return 'Lernplan konnte nicht erstellt werden. Bitte versuche es erneut oder lade eine textbasierte PDF, DOCX oder PPTX hoch.';
+    }
+
     try {
       setIsAnalyzing(true);
       analysisProgressRef.current = 0;
@@ -597,6 +614,8 @@ export default function StudyScreen() {
           weeklyHours: Math.max(1, Number(weeklyHours) || 8),
           minutesPerLearningDay,
           tier: activeStudyV2Tier,
+          previewMode: activeStudyV2Tier === 'free_demo',
+          maxPages: activeStudyV2Tier === 'free_demo' ? 5 : undefined,
         });
         if (!ingest.corpusDocumentId) {
           logStudyClientStep('summarize_started', { projectId: ingest.projectId });
@@ -725,7 +744,7 @@ export default function StudyScreen() {
           },
         ],
       }));
-      setMode(files.length ? 'processing' : 'create');
+      setMode('create');
       if (error instanceof StudyV2ApiError && error.code === 'MONTHLY_AI_LIMIT_REACHED') {
         Alert.alert(STUDY_LIMIT_REACHED_COPY.title, STUDY_LIMIT_REACHED_COPY.message, [
           { text: 'Extra KI-Projekt kaufen - 0,99 EUR', onPress: () => router.push('/premium') },
@@ -733,7 +752,7 @@ export default function StudyScreen() {
           { text: 'Spaeter', style: 'cancel' },
         ]);
       } else {
-        Alert.alert('Lernplan konnte nicht erstellt werden', error?.message ?? 'Bitte versuche es erneut.');
+        Alert.alert('Lernplan konnte nicht erstellt werden', friendlyStudyError(error));
       }
     } finally {
       setTimeout(() => {
@@ -923,8 +942,8 @@ export default function StudyScreen() {
 
     function showLockedPlanPaywall() {
       Alert.alert(
-        'Vollstaendigen Lernplan freischalten',
-        input.plan.lockedReason ?? 'Wenn du den vollstaendigen Lernplan angezeigt bekommen willst, steige auf Premium um.',
+        'Vollständigen Lernplan freischalten',
+        input.plan.lockedReason ?? 'Wenn du den vollständigen Lernplan angezeigt bekommen willst, steige auf Premium um.',
         [
           { text: 'Abo-Modelle ansehen', onPress: () => router.push('/premium') },
           { text: 'Spaeter', style: 'cancel' },
@@ -936,7 +955,7 @@ export default function StudyScreen() {
       return <Text style={styles.emptyText}>Keine geplanten Lerntage.</Text>;
     }
 
-    return days.map((day) => {
+    const renderedDays = days.map((day) => {
       const expanded = expandedStudyDay === `${input.scope}_${day.dateKey}`;
       const expandedKey = `${input.scope}_${day.dateKey}`;
       const locked = day.sessions.length > 0 && day.sessions.every((session) => lockedSessionIds.has(session.id));
@@ -1020,6 +1039,31 @@ export default function StudyScreen() {
         </View>
       );
     });
+
+    const hasLockedDay = days.some((day) => day.sessions.length > 0 && day.sessions.every((session) => lockedSessionIds.has(session.id)));
+    if (input.plan.lockedReason && !hasLockedDay) {
+      const nextDate = dayjs(days[0]?.dateKey ?? new Date()).add(1, 'day').format('YYYY-MM-DD');
+      renderedDays.push(
+        <Pressable
+          key={`${input.scope}_premium_teaser`}
+          onPress={showLockedPlanPaywall}
+          style={[styles.studyDayCard, styles.lockedStudyDayCard, styles.lockedTeaserCard]}
+        >
+          <View style={styles.lockOverlay}>
+            <Text style={styles.lockIcon}>🔒</Text>
+          </View>
+          <View style={styles.dayHeaderText}>
+            <Text style={styles.studyDayTitle}>{formatStudyDateTitle(nextDate)}</Text>
+            <Text style={styles.lockedDayText}>Premium freischalten</Text>
+          </View>
+          <Text style={styles.lockedPreviewText}>
+            Der vollständige Lernplan ist vorbereitet. Schalte Premium frei, um alle weiteren Lerntage zu sehen.
+          </Text>
+        </Pressable>,
+      );
+    }
+
+    return renderedDays;
   }
 
   function renderStudyEditors() {
@@ -1579,9 +1623,13 @@ function makeStyles(
     unitBadge: { color: colors.primary, backgroundColor: colors.cardSecondary, borderRadius: 999, overflow: 'hidden', paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900', fontFamily: fontFamily.bold },
     studyDayCard: { borderRadius: 20, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.card, padding: 16, marginBottom: 8 },
     lockedStudyDayCard: { opacity: 0.55 },
+    lockedTeaserCard: { position: 'relative', overflow: 'hidden', minHeight: 116, borderStyle: 'dashed' },
+    lockOverlay: { position: 'absolute', top: 12, right: 12, width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.cardSecondary, borderWidth: 1, borderColor: colors.border },
+    lockIcon: { fontSize: 18 },
     studyDayHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
     studyDayTitle: { color: colors.text, fontSize: 18, fontWeight: '900', fontFamily: fontFamily.bold, textTransform: 'capitalize' },
     lockedDayText: { color: colors.primary, fontSize: 12, fontWeight: '900', marginTop: 4, fontFamily: fontFamily.bold },
+    lockedPreviewText: { color: colors.textMuted, lineHeight: 19, marginTop: 12, paddingRight: 36, fontFamily: fontFamily.regular },
     studyDayChevron: { color: colors.primary, fontSize: 16, fontWeight: '900', fontFamily: fontFamily.bold },
     studyDayDetails: { marginTop: 14, gap: 12 },
     dayManagementRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

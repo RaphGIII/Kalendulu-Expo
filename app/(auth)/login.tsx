@@ -19,7 +19,6 @@ import { Link } from 'expo-router';
 
 import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
-import { supabasePublicConfig } from '@/src/lib/supabase';
 
 const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
@@ -35,16 +34,17 @@ export default function LoginScreen() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [busy, setBusy] = useState<'email' | 'connection' | null>(null);
-  const [connectionResult, setConnectionResult] = useState('Noch nicht getestet.');
+  const [busy, setBusy] = useState<'email' | null>(null);
 
   const authErrorMessage = (error: any) => {
-    if (!error) return 'Unbekannter Fehler.';
-    const parts = [
-      error.name ? String(error.name) : '',
-      error.message ? String(error.message) : String(error),
-    ].filter(Boolean);
-    return parts.join(': ');
+    const message = String(error?.message ?? error ?? '').toLowerCase();
+    if (message.includes('invalid login') || message.includes('invalid credentials')) {
+      return 'Diese E-Mail-Adresse oder das Passwort ist nicht korrekt.';
+    }
+    if (message.includes('network') || message.includes('fetch')) {
+      return 'Anmeldung fehlgeschlagen. Bitte prüfe deine Internetverbindung und versuche es erneut.';
+    }
+    return 'Anmeldung fehlgeschlagen. Bitte prüfe deine Angaben und versuche es erneut.';
   };
 
   const onLogin = async () => {
@@ -57,30 +57,8 @@ export default function LoginScreen() {
       setBusy('email');
       await signIn({ email, password });
     } catch (error: any) {
+      console.warn('Email login failed:', error);
       Alert.alert('Login fehlgeschlagen', authErrorMessage(error));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const testSupabaseConnection = async () => {
-    if (!supabasePublicConfig.url || !supabasePublicConfig.publishableKey) {
-      setConnectionResult('Konfiguration unvollstaendig: Supabase URL oder Key fehlt.');
-      return;
-    }
-
-    try {
-      setBusy('connection');
-      const response = await fetch(`${supabasePublicConfig.url}/auth/v1/settings`, {
-        headers: {
-          apikey: supabasePublicConfig.publishableKey,
-          Authorization: `Bearer ${supabasePublicConfig.publishableKey}`,
-        },
-      });
-      const text = await response.text();
-      setConnectionResult(`HTTP ${response.status}\n${text.slice(0, 300)}`);
-    } catch (error: any) {
-      setConnectionResult(`${error?.name ?? 'Error'}: ${error?.message ?? String(error)}`);
     } finally {
       setBusy(null);
     }
@@ -165,27 +143,6 @@ export default function LoginScreen() {
                       <Text style={styles.primaryButtonText}>Anmelden</Text>
                     )}
                   </Pressable>
-
-                  <View style={styles.diagnosticsBox}>
-                    <Text style={styles.diagnosticsTitle}>Supabase Diagnose</Text>
-                    <Text style={styles.diagnosticsText}>URL vorhanden: {supabasePublicConfig.urlPresent ? 'ja' : 'nein'}</Text>
-                    <Text style={styles.diagnosticsText}>Host: {supabasePublicConfig.host || '-'}</Text>
-                    <Text style={styles.diagnosticsText}>Key vorhanden: {supabasePublicConfig.keyPresent ? 'ja' : 'nein'}</Text>
-                    <Text style={styles.diagnosticsText}>Key Laenge: {supabasePublicConfig.keyLength}</Text>
-                    <Text style={styles.diagnosticsText}>Key Prefix gueltig: {supabasePublicConfig.keyPrefixValid ? 'ja' : 'nein'}</Text>
-                    <Pressable
-                      onPress={testSupabaseConnection}
-                      disabled={busy !== null}
-                      style={[styles.secondaryButton, busy ? styles.buttonDisabled : null]}
-                    >
-                      {busy === 'connection' ? (
-                        <ActivityIndicator color="#2B3852" />
-                      ) : (
-                        <Text style={styles.secondaryButtonText}>Supabase Verbindung testen</Text>
-                      )}
-                    </Pressable>
-                    <Text style={styles.connectionResult}>{connectionResult}</Text>
-                  </View>
 
                   <Link href="/register" asChild>
                     <Pressable style={styles.linkWrap}>
@@ -288,47 +245,6 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '800',
-  },
-  diagnosticsBox: {
-    marginTop: 12,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: '#D6DCE8',
-    backgroundColor: '#FFFFFF',
-    padding: 12,
-    gap: 4,
-  },
-  diagnosticsTitle: {
-    color: '#2B3852',
-    fontSize: 14,
-    fontWeight: '800',
-    marginBottom: 3,
-  },
-  diagnosticsText: {
-    color: '#516079',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    minHeight: 38,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#CAD3E3',
-    backgroundColor: '#F5F7FB',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  secondaryButtonText: {
-    color: '#2B3852',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  connectionResult: {
-    color: '#516079',
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: 5,
   },
   linkWrap: {
     alignItems: 'center',
