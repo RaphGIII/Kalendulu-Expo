@@ -13,6 +13,7 @@ type DeleteResult = {
   ok: boolean;
   optional?: boolean;
   error?: string;
+  deletedObjects?: number;
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -127,9 +128,44 @@ serve(async (req: Request): Promise<Response> => {
       });
     }
 
+    async function deleteStoragePrefix(bucket: string, prefix: string, optional = true) {
+      const { data, error } = await adminClient.storage.from(bucket).list(prefix, {
+        limit: 1000,
+        sortBy: { column: 'name', order: 'asc' },
+      });
+
+      if (error) {
+        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: error.message });
+        if (!optional) throw new Error(`Failed to list storage ${bucket}/${prefix}: ${error.message}`);
+        return;
+      }
+
+      const paths = (data ?? [])
+        .filter((item) => item.name)
+        .map((item) => `${prefix}/${item.name}`);
+
+      if (!paths.length) {
+        results.push({ table: `storage:${bucket}/${prefix}`, ok: true, optional, deletedObjects: 0 });
+        return;
+      }
+
+      const { error: removeError } = await adminClient.storage.from(bucket).remove(paths);
+      if (removeError) {
+        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: removeError.message });
+        if (!optional) throw new Error(`Failed to remove storage ${bucket}/${prefix}: ${removeError.message}`);
+        return;
+      }
+
+      results.push({ table: `storage:${bucket}/${prefix}`, ok: true, optional, deletedObjects: paths.length });
+    }
+
     // Core Kalendulu tables from current migration.
+    await deleteRows('study_v2_projects', 'user_id', user.id, true);
+    await deleteRows('api_cost_events', 'user_id', user.id, true);
+    await deleteRows('user_ai_credit_ledger', 'user_id', user.id, true);
     await deleteRows('user_app_state', 'user_id', user.id, false);
     await deleteRows('profiles', 'id', user.id, false);
+    await deleteStoragePrefix('study-temp', `study-temp/${user.id}`, true);
 
     // Optional future tables. These are allowed to fail if they do not exist yet.
     await deleteRows('goals', 'user_id', user.id, true);

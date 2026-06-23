@@ -39,6 +39,7 @@ export interface Env {
   OPENAI_GPT5_NANO_OUTPUT_USD_PER_1M?: string;
   MISTRAL_OCR_USD_PER_1000_PAGES?: string;
   API_COST_USD_TO_EUR_RATE?: string;
+  MAX_REQUEST_BYTES?: string;
 }
 
 type GoalQuestion = {
@@ -200,6 +201,15 @@ function jsonResponse(data: unknown, status = 200) {
 
 function errorResponse(message: string, status = 400, extra?: Record<string, unknown>) {
   return jsonResponse({ error: message, ...extra }, status);
+}
+
+function requestSizeLimitBytes(env: Env) {
+  return Math.max(1, Number(env.MAX_REQUEST_BYTES ?? 15 * 1024 * 1024) || 15 * 1024 * 1024);
+}
+
+function requestExceedsSizeLimit(request: Request, env: Env) {
+  const contentLength = Number(request.headers.get('content-length') ?? 0);
+  return Number.isFinite(contentLength) && contentLength > requestSizeLimitBytes(env);
 }
 
 function safeString(value: unknown, fallback = ''): string {
@@ -1469,6 +1479,10 @@ export default {
         return errorResponse('Method not allowed', 405);
       }
 
+      if (requestExceedsSizeLimit(request, env)) {
+        return errorResponse('Request body too large.', 413);
+      }
+
       if (isStudyPageExtractionRoute && request.method !== 'POST') {
         return errorResponse('Method not allowed', 405);
       }
@@ -1476,17 +1490,8 @@ export default {
       let authUser: { id?: string; email?: string };
       try {
         authUser = await requireAuthenticatedUser(request, env);
-      } catch (error: any) {
-        return errorResponse('Unauthorized', 401, {
-          authDebug: error?.message ?? 'Unknown auth error',
-          supabaseHost: (() => {
-            try {
-              return new URL(env.SUPABASE_URL).host;
-            } catch {
-              return 'invalid_supabase_url';
-            }
-          })(),
-        });
+      } catch {
+        return errorResponse('Unauthorized', 401);
       }
 
       if (isStudyPageExtractionRoute) {

@@ -1,10 +1,7 @@
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
+import { getStudyApiUrl } from '../config/env';
 import type { UserStudyTier } from '../billing';
 import type { DetectedStudySection } from './types';
-
-const API_URL =
-  process.env.EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL ||
-  process.env.EXPO_PUBLIC_PLANNER_API_URL;
 
 export type PageLearningRelevance = 'high' | 'medium' | 'low' | 'noise';
 export type PageLearningSourceType = 'pdf' | 'docx' | 'pptx' | 'txt' | 'md';
@@ -122,7 +119,8 @@ function pagesToSections(pages: PageLearningUnit[]): DetectedStudySection[] {
 export async function startPageLearningExtraction(
   input: StartPageLearningExtractionInput,
 ): Promise<PageLearningExtractionResult> {
-  if (!API_URL) {
+  const apiUrl = getStudyApiUrl();
+  if (!apiUrl) {
     throw new Error('Study extractor API fehlt. Setze EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL oder EXPO_PUBLIC_PLANNER_API_URL.');
   }
 
@@ -139,7 +137,7 @@ export async function startPageLearningExtraction(
 
   const authHeaders = await buildAuthenticatedJsonHeaders();
 
-  const res = await fetch(`${API_URL}/study/page-learning-extraction`, {
+  const res = await fetch(`${apiUrl}/study/page-learning-extraction`, {
     method: 'POST',
     headers: {
       Authorization: authHeaders.Authorization,

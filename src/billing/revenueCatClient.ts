@@ -1,6 +1,8 @@
 import { Platform } from 'react-native';
 
-const IOS_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY;
+import { publicEnv } from '../config/env';
+
+const IOS_API_KEY = publicEnv.revenueCatIosApiKey;
 const ANDROID_API_KEY = process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
 
 let configured = false;
@@ -11,7 +13,7 @@ export async function getPurchases() {
   if (!purchasesModule) {
     const module = await import('react-native-purchases');
     purchasesModule = module.default;
-    console.log('[revenuecat] loaded');
+    if (__DEV__) console.log('[revenuecat] loaded');
   }
   return purchasesModule;
 }
@@ -94,5 +96,16 @@ export async function configureRevenueCat(userId?: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+export async function logOutRevenueCat() {
+  if (!configured) return;
+  try {
+    const Purchases = await getPurchases();
+    await Purchases.logOut();
+    configuredUserId = undefined;
+  } catch (error) {
+    if (__DEV__) console.warn('RevenueCat logout failed', error);
   }
 }

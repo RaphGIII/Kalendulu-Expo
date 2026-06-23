@@ -1,13 +1,13 @@
 import { buildAuthenticatedJsonHeaders } from '../../lib/apiAuth';
-
-const API_URL = process.env.EXPO_PUBLIC_PLANNER_API_URL;
+import { publicEnv } from '../../config/env';
 
 export async function postAdaptiveGoalApi<T>(path: string, body: unknown): Promise<T> {
-  if (!API_URL) {
+  const apiUrl = publicEnv.plannerApiUrl;
+  if (!apiUrl) {
     throw new Error('Planner API URL missing');
   }
 
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${apiUrl}${path}`, {
     method: 'POST',
     headers: await buildAuthenticatedJsonHeaders(),
     body: JSON.stringify(body),

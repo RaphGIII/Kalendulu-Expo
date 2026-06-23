@@ -7,9 +7,9 @@
     "icon": "./assets/images/icon.png",
     "scheme": "kalendulu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "icon": "./assets/images/icon.png",
       "bundleIdentifier": "com.kalendulu.app",
       "buildNumber": "13",

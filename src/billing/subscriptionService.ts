@@ -78,9 +78,11 @@ function activeProductIdForPlan(customerInfo: CustomerInfo, tier: UserStudyTier)
 
 function statusFromCustomerInfo(customerInfo: CustomerInfo): SubscriptionStatus {
   const tier = resolvePlanFromCustomerInfo(customerInfo);
-  console.log('[revenuecat] active entitlements', Object.keys(customerInfo.entitlements.active));
-  console.log('[revenuecat] active subscriptions', customerInfo.activeSubscriptions ?? []);
-  console.log('[revenuecat] resolved plan', tier);
+  if (__DEV__) {
+    console.log('[revenuecat] active entitlements', Object.keys(customerInfo.entitlements.active));
+    console.log('[revenuecat] active subscriptions', customerInfo.activeSubscriptions ?? []);
+    console.log('[revenuecat] resolved plan', tier);
+  }
   return {
     tier,
     entitlementActive: tier !== 'free',
@@ -150,7 +152,7 @@ export async function purchaseRevenueCatPackage(packageToPurchase: PurchasesPack
   await ensureRevenueCatReady(userId);
   const Purchases = await getPurchases();
   const { customerInfo } = await Purchases.purchasePackage(packageToPurchase);
-  console.log('[revenuecat] purchase success');
+  if (__DEV__) console.log('[revenuecat] purchase success');
   let resolvedInfo = customerInfo;
   if (resolvePlanFromCustomerInfo(resolvedInfo) === 'free') {
     resolvedInfo = await Purchases.getCustomerInfo();

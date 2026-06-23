@@ -1,6 +1,7 @@
 import Constants from 'expo-constants';
+import { isProductionRuntime, publicEnv } from './env';
 
-const requestedDevBypass = process.env.EXPO_PUBLIC_DEV_AUTH_BYPASS === 'true';
+const requestedDevBypass = publicEnv.devAuthBypassRequested;
 
 export const DEV_AUTH_BYPASS =
-  __DEV__ && Constants.appOwnership === 'expo' && requestedDevBypass;
+  !isProductionRuntime && Constants.appOwnership === 'expo' && requestedDevBypass;

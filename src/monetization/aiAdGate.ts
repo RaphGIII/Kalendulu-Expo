@@ -1,5 +1,6 @@
 import { Alert, Platform } from "react-native";
 
+import { publicEnv } from "@/src/config/env";
 import { assertCanStartFreeAiBlueprint } from "@/src/monetization/aiQuota";
 
 export type AiAdGatePhase = "goal_refinement" | "planner_bundle";
@@ -12,8 +13,7 @@ type AiAdGateInput = {
 };
 
 const REQUIRED_ADS_PER_BLUEPRINT =
-  Number(process.env.EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT ?? 2) ||
-  2;
+  publicEnv.aiRequiredRewardedAdsPerBlueprint;
 
 function getRewardedAdUnitId() {
   if (Platform.OS !== "ios") {
@@ -21,7 +21,7 @@ function getRewardedAdUnitId() {
   }
 
   return (
-    process.env.EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID
+    publicEnv.admobRewardedIosAdUnitId
   );
 }
 
@@ -63,7 +63,7 @@ function confirmRewardedAdDisclosure(phase: AiAdGatePhase) {
 
 async function showRewardedAdOnce(): Promise<void> {
   const ads = await import("react-native-google-mobile-ads");
-  console.log("[ads] loaded");
+  if (__DEV__) console.log("[ads] loaded");
   const adUnitId = getRewardedAdUnitId() ?? ads.TestIds.REWARDED;
 
   return new Promise((resolve, reject) => {

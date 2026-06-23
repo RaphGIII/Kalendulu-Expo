@@ -1,7 +1,6 @@
 import type { KnowledgeUnit, StudyBuildResult, StudyPlan } from './types';
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
-
-const API_URL = process.env.EXPO_PUBLIC_PLANNER_API_URL;
+import { publicEnv } from '../config/env';
 
 function compactUnits(units: KnowledgeUnit[]) {
   return units.map((unit) => ({
@@ -43,7 +42,8 @@ function compactPlan(plan: StudyPlan) {
 }
 
 export async function enhanceStudyBuildWithAi(result: StudyBuildResult) {
-  if (!API_URL) {
+  const apiUrl = publicEnv.plannerApiUrl;
+  if (!apiUrl) {
     return {
       result,
       message: 'Premium-KI ist gerade nicht verfuegbar. Dein algorithmischer Lernplan bleibt aktiv.',
@@ -51,7 +51,7 @@ export async function enhanceStudyBuildWithAi(result: StudyBuildResult) {
   }
 
   try {
-    const res = await fetch(`${API_URL}/study/ai/enhance`, {
+    const res = await fetch(`${apiUrl}/study/ai/enhance`, {
       method: 'POST',
       headers: await buildAuthenticatedJsonHeaders(),
       body: JSON.stringify({

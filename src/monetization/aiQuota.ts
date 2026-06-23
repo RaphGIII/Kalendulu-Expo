@@ -1,9 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { publicEnv } from "@/src/config/env";
 
 const AI_QUOTA_KEY = "kalendulu:ai-free-blueprint-quota:v1";
 
 export const FREE_AI_BLUEPRINTS_PER_MONTH =
-  Number(process.env.EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH ?? 3) || 3;
+  publicEnv.aiFreeBlueprintsPerMonth;
 
 type AiQuotaState = {
   monthKey: string;

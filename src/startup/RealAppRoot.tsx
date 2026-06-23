@@ -8,6 +8,7 @@ import { StatusBar } from 'expo-status-bar';
 import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import WelcomeIntroOverlay from '@/components/WelcomeIntroOverlay';
 import { AuthProvider, useAuth } from '@/src/auth/AuthProvider';
+import { BillingBootstrapper } from '@/src/billing';
 
 const WELCOME_INTRO_STORAGE_PREFIX = 'kalendulu:welcome-intro-shown';
 
@@ -107,14 +108,16 @@ function AppNavigator() {
 
 export default function RealAppRoot() {
   useEffect(() => {
-    console.log('[startup] loading app providers');
+    if (__DEV__) console.log('[startup] loading app providers');
   }, []);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <AuthProvider>
-          <AppNavigator />
+          <BillingBootstrapper>
+            <AppNavigator />
+          </BillingBootstrapper>
         </AuthProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

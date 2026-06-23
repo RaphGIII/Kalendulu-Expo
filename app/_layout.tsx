@@ -15,14 +15,14 @@ class StartupErrorBoundary extends React.Component<React.PropsWithChildren, Star
   }
 
   componentDidCatch(error: Error) {
-    console.warn('[startup] app provider load failed', error);
+    if (__DEV__) console.warn('[startup] app provider load failed', error);
   }
 
   render() {
     if (this.state.error) {
       return (
         <StartupLoadingScreen
-          detail={this.state.error.message || 'Die App konnte gerade nicht geladen werden.'}
+          detail={__DEV__ ? this.state.error.message : 'Die App konnte gerade nicht geladen werden. Bitte starte sie neu.'}
         />
       );
     }
@@ -45,9 +45,9 @@ export default function RootLayout() {
   const [shouldLoadApp, setShouldLoadApp] = useState(false);
 
   useEffect(() => {
-    console.log('[startup] root rendered');
+    if (__DEV__) console.log('[startup] root rendered');
     const timer = setTimeout(() => {
-      console.log('[startup] loading app providers');
+      if (__DEV__) console.log('[startup] loading app providers');
       setShouldLoadApp(true);
     }, 0);
 

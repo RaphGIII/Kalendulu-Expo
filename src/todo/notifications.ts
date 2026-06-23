@@ -19,7 +19,7 @@ function ensureNotificationHandler() {
       }),
     });
     notificationHandlerConfigured = true;
-    console.log('[notifications] loaded');
+    if (__DEV__) console.log('[notifications] loaded');
   } catch {
     notificationHandlerConfigured = false;
   }

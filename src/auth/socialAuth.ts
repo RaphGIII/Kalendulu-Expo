@@ -56,8 +56,14 @@ export async function signInWithSupabaseOAuth(provider: 'google' | 'apple') {
   const result = await WebBrowser.openAuthSessionAsync(authUrl, oauthRedirectUrl);
 
   if (result.type === 'success' && result.url) {
-    await createSessionFromUrl(result.url);
+    return createSessionFromUrl(result.url);
   }
+
+  if (result.type === 'cancel' || result.type === 'dismiss') {
+    return null;
+  }
+
+  throw new Error('OAuth-Anmeldung konnte nicht abgeschlossen werden.');
 }
 
 export function useHandleIncomingOAuthUrl() {
@@ -67,7 +73,7 @@ export function useHandleIncomingOAuthUrl() {
     if (!incomingUrl) return;
 
     createSessionFromUrl(incomingUrl).catch((error) => {
-      console.warn('OAuth session restore failed:', error);
+      if (__DEV__) console.warn('OAuth session restore failed:', error);
     });
   }, [incomingUrl]);
 }

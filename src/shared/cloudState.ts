@@ -32,6 +32,6 @@ export async function saveCloudState<T>(stateKey: string, state: T): Promise<voi
   });
 
   if (error) {
-    console.warn(`Cloud sync failed for ${stateKey}:`, error.message);
+    if (__DEV__) console.warn(`Cloud sync failed for ${stateKey}:`, error.message);
   }
 }

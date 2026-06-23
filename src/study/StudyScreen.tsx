@@ -96,7 +96,7 @@ type SessionDraft = {
 dayjs.locale('de');
 
 function logStudyClientStep(stage: string, details?: Record<string, unknown>) {
-  console.log('[StudyV2]', stage, details ?? {});
+  if (__DEV__) console.log('[StudyV2]', stage, details ?? {});
 }
 
 const SHOW_STUDY_DEBUG_STATUS = false;
@@ -373,7 +373,7 @@ export default function StudyScreen() {
   const [files, setFiles] = useState<TemporaryStudyAsset[]>([]);
   const [uploadMessages, setUploadMessages] = useState<string[]>([]);
   const [preview, setPreview] = useState<StudyBuildResult | null>(null);
-  const [processingReport, setProcessingReport] = useState<StudyProcessingReport | null>(null);
+  const [, setProcessingReport] = useState<StudyProcessingReport | null>(null);
   const [showExamPicker, setShowExamPicker] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);

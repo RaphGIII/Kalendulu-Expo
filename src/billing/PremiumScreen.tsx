@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 
 import { useAuth } from '../auth/AuthProvider';
+import { LEGAL_LINKS } from '../config/legalLinks';
 import { useAppTheme } from '../theme/ThemeProvider';
 import {
   configureRevenueCat,
@@ -24,7 +25,7 @@ import {
 } from './index';
 import type { UserStudyTier } from './types';
 
-const SHOW_REVENUECAT_DEBUG = true;
+const SHOW_REVENUECAT_DEBUG = __DEV__;
 
 type PremiumPlan = {
   id: string;
@@ -367,6 +368,14 @@ export default function PremiumScreen() {
     }
   }
 
+  async function openLegalLink(url: string) {
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Link öffnen', 'Der Link konnte gerade nicht geöffnet werden.');
+    }
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -470,6 +479,17 @@ export default function PremiumScreen() {
           <Pressable onPress={() => void manageSubscription()} style={styles.secondaryAction}>
             <Text style={styles.secondaryActionText}>Abo verwalten</Text>
           </Pressable>
+          <View style={styles.legalLinks}>
+            <Pressable onPress={() => void openLegalLink(LEGAL_LINKS.privacy)}>
+              <Text style={styles.legalLinkText}>Datenschutz</Text>
+            </Pressable>
+            <Pressable onPress={() => void openLegalLink(LEGAL_LINKS.support)}>
+              <Text style={styles.legalLinkText}>Support</Text>
+            </Pressable>
+            <Pressable onPress={() => void openLegalLink(LEGAL_LINKS.imprint)}>
+              <Text style={styles.legalLinkText}>Impressum</Text>
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -513,6 +533,8 @@ function makeStyles(
     footerActions: { gap: 10, marginTop: 4 },
     secondaryAction: { minHeight: 48, borderRadius: 14, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.card },
     secondaryActionText: { color: colors.text, fontWeight: '900', fontFamily: fontFamily.bold },
+    legalLinks: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 16, paddingTop: 8 },
+    legalLinkText: { color: colors.primary, fontWeight: '800', fontFamily: fontFamily.bold },
     debugPanel: { borderRadius: 14, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.cardSecondary, padding: 12, gap: 8 },
     debugTitle: { color: colors.text, fontSize: 16, fontWeight: '900', fontFamily: fontFamily.bold },
     debugLine: { color: colors.textMuted, fontSize: 12, lineHeight: 17, fontFamily: fontFamily.regular },

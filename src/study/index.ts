@@ -16,3 +16,4 @@ export * from './studyProgressLink';
 export * from './studyUsage';
 export * from './studyLimitGuards';
 export * from './shortStudyLabel';
+export * from './studyTierLimitValidation';

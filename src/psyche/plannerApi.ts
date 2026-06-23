@@ -8,9 +8,8 @@ import {
 } from './types';
 import type { FreeSlot } from './buildFreeSlots';
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
+import { publicEnv } from '../config/env';
 import type { UserGoalLearningProfile } from '../ai/adaptiveGoal';
-
-const API_URL = process.env.EXPO_PUBLIC_PLANNER_API_URL;
 
 type PlannerApiRequest = {
   goal: string;
@@ -48,11 +47,12 @@ function isPlannerBundle(value: any): value is PlannerBundle {
 export async function fetchPlannerBundle(
   input: PlannerApiRequest,
 ): Promise<PlannerBundle> {
-  if (!API_URL) {
+  const apiUrl = publicEnv.plannerApiUrl;
+  if (!apiUrl) {
     throw new Error('Planner API URL missing');
   }
 
-  const res = await fetch(`${API_URL}/planner/suggest`, {
+  const res = await fetch(`${apiUrl}/planner/suggest`, {
     method: 'POST',
     headers: await buildAuthenticatedJsonHeaders(),
     body: JSON.stringify(input),

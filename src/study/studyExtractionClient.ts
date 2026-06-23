@@ -1,8 +1,7 @@
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
+import { getStudyApiUrl } from '../config/env';
 import type { UserStudyTier } from '../billing';
 import type { DetectedStudySection } from './types';
-
-const API_URL = process.env.EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL || process.env.EXPO_PUBLIC_PLANNER_API_URL;
 
 export type StudyExtractionResult = {
   jobId: string;
@@ -29,7 +28,8 @@ export async function startStudyExtraction(input: {
   size?: number;
   tier: UserStudyTier;
 }): Promise<StudyExtractionResult> {
-  if (!API_URL) {
+  const apiUrl = getStudyApiUrl();
+  if (!apiUrl) {
     throw new Error('Study extractor API missing.');
   }
 
@@ -44,7 +44,7 @@ export async function startStudyExtraction(input: {
   } as any);
 
   const authHeaders = await buildAuthenticatedJsonHeaders();
-  const res = await fetch(`${API_URL}/study/extractions`, {
+  const res = await fetch(`${apiUrl}/study/extractions`, {
     method: 'POST',
     headers: {
       Authorization: authHeaders.Authorization,
@@ -60,8 +60,10 @@ export async function startStudyExtraction(input: {
 }
 
 export async function getStudyExtractionJob(jobId: string): Promise<StudyExtractionResult> {
+  const apiUrl = getStudyApiUrl();
+  if (!apiUrl) throw new Error('Study extractor API missing.');
   const headers = await buildAuthenticatedJsonHeaders();
-  const res = await fetch(`${API_URL}/study/extractions/${jobId}`, {
+  const res = await fetch(`${apiUrl}/study/extractions/${jobId}`, {
     headers,
   });
   const data = await res.json();
@@ -70,8 +72,10 @@ export async function getStudyExtractionJob(jobId: string): Promise<StudyExtract
 }
 
 export async function deleteStudyExtractionJob(jobId: string) {
+  const apiUrl = getStudyApiUrl();
+  if (!apiUrl) throw new Error('Study extractor API missing.');
   const headers = await buildAuthenticatedJsonHeaders();
-  await fetch(`${API_URL}/study/extractions/${jobId}`, {
+  await fetch(`${apiUrl}/study/extractions/${jobId}`, {
     method: 'DELETE',
     headers,
   });

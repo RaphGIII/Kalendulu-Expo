@@ -1,9 +1,6 @@
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
+import { getStudyApiUrl } from '../config/env';
 import type { StudyTargetLevel, TemporaryStudyAsset } from './types';
-
-const API_URL =
-  process.env.EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL ||
-  process.env.EXPO_PUBLIC_PLANNER_API_URL;
 
 export type StudyV2Tier = 'free_demo' | 'starter' | 'plus' | 'premium_monthly' | 'premium_yearly';
 export type StudyProcessingStatus = 'pending' | 'running' | 'success' | 'warning' | 'error';
@@ -151,10 +148,11 @@ async function readJsonResponse(res: Response) {
 }
 
 function assertApiUrl() {
-  if (!API_URL) {
+  const apiUrl = getStudyApiUrl();
+  if (!apiUrl) {
     throw new Error('Study-V2 API fehlt. Setze EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL oder EXPO_PUBLIC_PLANNER_API_URL.');
   }
-  return API_URL;
+  return apiUrl;
 }
 
 export async function ingestStudyV2(input: {

@@ -3,20 +3,14 @@ import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim();
-const supabasePublishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+import { publicEnv } from '../config/env';
 
-if (!supabaseUrl) {
-  console.warn('EXPO_PUBLIC_SUPABASE_URL fehlt. Supabase Auth wird ohne gueltige Konfiguration nicht funktionieren.');
-}
-
-if (!supabasePublishableKey) {
-  console.warn('EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY fehlt. Supabase Auth wird ohne gueltige Konfiguration nicht funktionieren.');
-}
+const supabaseUrl = publicEnv.supabaseUrl;
+const supabasePublishableKey = publicEnv.supabasePublishableKey;
 
 export const supabase = createClient(
-  supabaseUrl || 'https://missing-supabase-url.supabase.co',
-  supabasePublishableKey || 'missing-supabase-publishable-key',
+  supabaseUrl!,
+  supabasePublishableKey!,
   {
     auth: {
       storage: AsyncStorage,
