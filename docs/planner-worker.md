@@ -28,6 +28,18 @@ Hardening:
 - Study V2 persistence uses the user access token for user-owned rows
 - API cost events are server-written
 
+Server-side entitlement protected routes:
+
+- `/study-v2/ingest`
+- `/study-v2/summarize`
+- `/study-v2/generate-plan`
+- `/study/extractions`
+- `/study/page-learning-extraction`
+- `/study/ai/enhance`
+- `/goal/refine`
+- `/planner/suggest`
+- `/api/ai/adaptive-goal/*`
+
 CORS:
 
 - Worker responses currently use `Access-Control-Allow-Origin: *` because the primary client is a native iOS app, not a browser origin with cookies.

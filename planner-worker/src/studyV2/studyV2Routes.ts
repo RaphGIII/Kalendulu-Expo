@@ -7,7 +7,7 @@ import { sanitizeStudyText, sourceWrappedText } from './sanitizeStudyText';
 import { durationMs, logStudyStep, markStart } from './studyLogger';
 import { buildCorpusSummary, estimatedCost } from './studyAi';
 import { generateStudyPlanFromCorpus } from './studyPlanGenerator';
-import { getApiPricing } from '../shared/apiPricing';
+import { getApiPricing, usdToEur } from '../shared/apiPricing';
 import { resolveAuthoritativeStudyPlan } from '../entitlements';
 import {
   assertStudyUsageAllowed,
@@ -65,6 +65,17 @@ function limitFail(result: Extract<Awaited<ReturnType<typeof assertStudyUsageAll
     upgradeOptions: result.upgradeOptions,
     reasons: result.reasons,
   }, 402);
+}
+
+function summarizeLimitFail(result: Extract<Awaited<ReturnType<typeof assertStudyUsageAllowed>>, { allowed: false }>) {
+  return jsonResponse({
+    ok: false,
+    code: result.code,
+    error: result.message,
+    message: result.message,
+    upgradeOptions: result.upgradeOptions,
+    reasons: result.reasons,
+  }, 429);
 }
 
 function now() {
@@ -367,9 +378,24 @@ async function handleSummarize(request: Request, env: StudyV2Env, user: AuthUser
   if (!user.id) return fail('Unauthorized', 401);
   const body = (await request.json().catch(() => null)) as any;
   const projectId = String(body?.projectId ?? '');
+  const title = String(body?.title ?? 'Lernprojekt');
   if (!projectId) return fail('projectId fehlt.', 400);
   const cleanedText = loadCleanedTextFromMemory(projectId);
   if (!cleanedText) return fail('Bereinigter Gesamttext konnte nicht geladen werden. Bitte Ingest erneut ausführen.', 404);
+  const entitlement = await resolveAuthoritativeStudyPlan(env, user);
+  const plan = entitlement.plan;
+  const planLimit = getStudyPlanLimit(plan);
+  const estimatedSummaryCostUsd = estimatedCost(cleanedText.length, Math.min(14000, cleanedText.length / 3));
+  const estimatedSourcePages = Math.max(1, Math.ceil(cleanedText.length / 2600));
+  const usageGate = await assertStudyUsageAllowed({
+    env,
+    user,
+    plan,
+    estimatedNextCostEur: usdToEur(env, estimatedSummaryCostUsd),
+    estimatedNextPages: estimatedSourcePages,
+  });
+  if (!usageGate.allowed) return summarizeLimitFail(usageGate);
+
   const sourceStats = {
     fileCount: Number(body?.fileCount ?? 0),
     totalBytes: Number(body?.totalBytes ?? 0),
@@ -386,16 +412,56 @@ async function handleSummarize(request: Request, env: StudyV2Env, user: AuthUser
     stage: 'summarization_started',
     status: 'start',
     message: 'Separater Summarize-Endpunkt gestartet.',
-    details: { cleanedTextCharacters: cleanedText.length },
+    details: { cleanedTextCharacters: cleanedText.length, plan, entitlementSource: entitlement.source, entitlementStatus: entitlement.status },
   });
-  const summary = await buildCorpusSummary({
+  let summary: Awaited<ReturnType<typeof buildCorpusSummary>>;
+  try {
+    summary = await buildCorpusSummary({
+      env,
+      requestId,
+      projectId,
+      userId: user.id,
+      title,
+      cleanedText,
+      sourceStats,
+    });
+  } catch (error) {
+    console.error('study-v2 summarize failed', error);
+    return fail('Zusammenfassung konnte nicht erstellt werden.', 502);
+  }
+
+  const pricing = getApiPricing(env);
+  const credit = await consumeAiCredits(
     env,
-    requestId,
+    user,
+    Math.max(0, summary.estimatedCostUsd - Math.max(0, planLimit.monthlyApiBudgetEur - usageGate.usage.computedCostEur)),
+  );
+  const costEvent = await recordApiCostEvent({
+    env,
+    user,
+    userPlanSnapshot: plan,
+    subscriptionStatus: entitlement.status,
     projectId,
-    userId: user.id,
-    title: String(body?.title ?? 'Lernprojekt'),
-    cleanedText,
-    sourceStats,
+    projectTitle: title,
+    requestId,
+    feature: 'study_v2',
+    stage: 'summary',
+    provider: 'openai',
+    apiKeyAlias: 'openai_main_key',
+    providerRequestId: summary.providerRequestId,
+    model: summary.model,
+    operation: 'summary',
+    inputTokens: summary.inputTokens,
+    outputTokens: summary.outputTokens,
+    cachedInputTokens: summary.cachedInputTokens,
+    fileCount: sourceStats.fileCount,
+    totalFileBytes: sourceStats.totalBytes,
+    unitPriceInputPer1M: pricing.openAiGpt5Nano.inputUsdPer1M,
+    unitPriceOutputPer1M: pricing.openAiGpt5Nano.outputUsdPer1M,
+    unitPriceCachedInputPer1M: pricing.openAiGpt5Nano.cachedInputUsdPer1M,
+    computedCostUsd: summary.estimatedCostUsd,
+    creditUsedUsd: credit.consumedUsd,
+    metadata: { chunkCount: summary.chunkCount, fallbackUsed: summary.fallbackUsed, separateEndpoint: true },
   });
   return jsonResponse({
     ok: true,
@@ -404,7 +470,7 @@ async function handleSummarize(request: Request, env: StudyV2Env, user: AuthUser
     corpusDocumentId: summary.corpus.id,
     corpusDocument: summary.corpus,
     summaryPreview: summary.corpus.summaryMarkdown.slice(0, 900),
-    warnings: summary.warnings,
+    warnings: [...summary.warnings, ...(costEvent.warning ? [costEvent.warning] : [])],
   });
 }
 

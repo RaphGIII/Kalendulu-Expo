@@ -9,13 +9,25 @@ Before TestFlight or App Store submission:
 5. Deploy Cloudflare Worker.
 6. Confirm RevenueCat products, entitlements, and current Offering.
 7. Confirm App Store Connect subscriptions.
-8. Run:
+8. Confirm server-side entitlement enforcement on Worker routes:
+
+- `/study-v2/ingest`
+- `/study-v2/summarize`
+- `/study-v2/generate-plan`
+- `/study/extractions`
+- `/study/page-learning-extraction`
+- `/study/ai/enhance`
+- `/goal/refine`
+- `/planner/suggest`
+- `/api/ai/adaptive-goal/*`
+
+9. Run:
 
 ```bash
 npm run validate:publish
 ```
 
-8. Build and submit:
+10. Build and submit:
 
 ```bash
 eas build --platform ios --profile production
