@@ -1,5 +1,6 @@
 import { unzipSync, strFromU8 } from 'fflate';
 import { parseJsonFromModelResponse } from './jsonParsing';
+import type { StudyBillingPlan } from './studyV2/studyPlanLimits';
 
 export interface StudyPageExtractionEnv {
   OPENAI_API_KEY?: string;
@@ -8,6 +9,20 @@ export interface StudyPageExtractionEnv {
   OPENAI_STUDY_PAGE_MAX_COST_USD?: string;
   OPENAI_STUDY_PAGE_INPUT_USD_PER_1M?: string;
   OPENAI_STUDY_PAGE_OUTPUT_USD_PER_1M?: string;
+}
+
+function pageLimitForPlan(plan: StudyBillingPlan) {
+  if (plan === 'premium_monthly' || plan === 'premium_yearly') return 250;
+  if (plan === 'plus') return 100;
+  if (plan === 'starter') return 50;
+  return 5;
+}
+
+function maxCostForPlan(plan: StudyBillingPlan) {
+  if (plan === 'premium_monthly' || plan === 'premium_yearly') return 0.08;
+  if (plan === 'plus') return 0.05;
+  if (plan === 'starter') return 0.025;
+  return 0.01;
 }
 
 type SourceType = 'pdf' | 'docx' | 'pptx' | 'txt' | 'md';
@@ -552,7 +567,7 @@ async function readSourcePages(file: File, sourceType: SourceType): Promise<Sour
   return { pages, warnings: [], sourceItemCount: pages.length };
 }
 
-export async function handleStudyPageExtractionRoute(request: Request, env: StudyPageExtractionEnv) {
+export async function handleStudyPageExtractionRoute(request: Request, env: StudyPageExtractionEnv, plan: StudyBillingPlan) {
   try {
     if (request.method === 'OPTIONS') return jsonResponse({ ok: true });
     if (request.method !== 'POST') return errorResponse('Method not allowed.', 405);
@@ -566,10 +581,14 @@ export async function handleStudyPageExtractionRoute(request: Request, env: Stud
     if (!sourceType) return errorResponse('Dieses Dateiformat wird aktuell nicht unterstuetzt.', 400);
 
     const warnings: string[] = [];
-    const maxCostUsd = maxBudget(env, String(form.get('maxCostUsd') ?? ''));
+    const maxCostUsd = Math.min(maxBudget(env, String(form.get('maxCostUsd') ?? '')), maxCostForPlan(plan));
     const source = await readSourcePages(file, sourceType);
-    const sourcePages = source.pages;
+    const pageLimit = pageLimitForPlan(plan);
+    const sourcePages = source.pages.slice(0, pageLimit);
     warnings.push(...source.warnings);
+    if (source.pages.length > pageLimit) {
+      warnings.push('Das Dokument wurde auf dein serverseitiges Seitenlimit begrenzt.');
+    }
     if (!sourcePages.length) {
       const message = sourceType === 'pdf'
         ? 'Diese PDF scheint gescannt zu sein oder enthaelt keinen auswaehlbaren Text. OCR ist noch nicht aktiviert.'

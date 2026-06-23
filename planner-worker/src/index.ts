@@ -10,6 +10,9 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { handleStudyPageExtractionRoute } from './studyPageExtractionRoutes';
 import { parseJsonFromModelResponse } from './jsonParsing';
 import { handleStudyV2Route } from './studyV2/studyV2Routes';
+import { resolveAuthoritativeStudyPlan } from './entitlements';
+import { assertStudyUsageAllowed, recordApiCostEvent } from './studyV2/costTracking';
+import type { StudyBillingPlan } from './studyV2/studyPlanLimits';
 export interface Env {
   OPENAI_API_KEY: string;
   SUPABASE_URL: string;
@@ -1221,7 +1224,6 @@ async function requireAuthenticatedUser(request: Request, env: Env) {
   return user;
 }
 
-type StudyTier = 'free' | 'student' | 'premium';
 type ExtractionJob = {
   jobId: string;
   status: 'pending' | 'processing' | 'done' | 'failed';
@@ -1248,11 +1250,44 @@ type ExtractionSection = NonNullable<ExtractionJob['result']>['sections'][number
 
 const studyExtractionJobs = new Map<string, ExtractionJob>();
 
-const studyTierLimits: Record<StudyTier, { maxPagesPerFile: number; maxFileSizeMb: number }> = {
-  free: { maxPagesPerFile: 10, maxFileSizeMb: 10 },
-  student: { maxPagesPerFile: 100, maxFileSizeMb: 30 },
-  premium: { maxPagesPerFile: 300, maxFileSizeMb: 100 },
-};
+function legacyStudyLimitsForPlan(plan: StudyBillingPlan) {
+  if (plan === 'premium_monthly' || plan === 'premium_yearly') return { maxPagesPerFile: 250, maxFileSizeMb: 100 };
+  if (plan === 'plus') return { maxPagesPerFile: 100, maxFileSizeMb: 60 };
+  if (plan === 'starter') return { maxPagesPerFile: 50, maxFileSizeMb: 40 };
+  return { maxPagesPerFile: 5, maxFileSizeMb: 20 };
+}
+
+function routeBudgetEstimateEur(route: string) {
+  if (route === '/planner/suggest') return 0.01;
+  if (route === '/goal/refine') return 0.004;
+  if (route.startsWith('/api/ai/adaptive-goal/')) return route.endsWith('/blueprint') ? 0.01 : 0.004;
+  if (route === '/study/ai/enhance') return 0.004;
+  return 0.004;
+}
+
+async function assertAiBudgetForRoute(env: Env, user: { id?: string; email?: string }, plan: StudyBillingPlan, route: string) {
+  const gate = await assertStudyUsageAllowed({
+    env,
+    user,
+    plan,
+    estimatedNextCostEur: routeBudgetEstimateEur(route),
+  });
+  return gate;
+}
+
+async function recordAiRouteCost(env: Env, user: { id?: string; email?: string }, plan: StudyBillingPlan, route: string, stage: string, costUsd: number) {
+  await recordApiCostEvent({
+    env,
+    user,
+    userPlanSnapshot: plan,
+    feature: route.startsWith('/api/ai/adaptive-goal/') ? 'adaptive_goal' : route.replace(/^\//, '').replace(/\//g, '_'),
+    stage,
+    provider: 'openai',
+    apiKeyAlias: 'openai_main_key',
+    operation: 'ai_generation',
+    computedCostUsd: costUsd,
+  });
+}
 
 function stripXml(value: string) {
   return value
@@ -1333,13 +1368,13 @@ function extractPdfText(raw: string) {
   return cleanExtractedText([...textMatches, ...arrayMatches].join('\n'));
 }
 
-async function runStudyExtraction(request: Request, userId: string) {
+async function runStudyExtraction(request: Request, userId: string, plan: StudyBillingPlan) {
   const form = await request.formData() as any;
   const file = form.get('file');
-  const tier = safeString(form.get('tier')).trim() as StudyTier || 'free';
+  const clientTierIgnored = safeString(form.get('tier')).trim();
   const fileName = safeString(form.get('fileName')).trim().toLowerCase();
   const fileSize = safeNumber(form.get('fileSize'), 0);
-  const limits = studyTierLimits[tier] ?? studyTierLimits.free;
+  const limits = legacyStudyLimitsForPlan(plan);
 
   if (!(file instanceof File)) {
     return errorResponse('File is required.', 400);
@@ -1389,7 +1424,7 @@ async function runStudyExtraction(request: Request, userId: string) {
       ownerId: userId,
       status: 'done',
       progress: { currentPage: pageCount, totalPages: pageCount, percent: 100, stage: 'done' },
-      warnings,
+      warnings: clientTierIgnored ? [...warnings, 'Client-Tarif wurde ignoriert; Server-Tarif wurde verwendet.'] : warnings,
       result: { pageCount, sections, compactText },
       createdAt: Date.now(),
     };
@@ -1410,7 +1445,14 @@ async function runStudyExtraction(request: Request, userId: string) {
   }
 }
 
-async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env) {
+async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env, plan: StudyBillingPlan, authUser: { id?: string; email?: string }) {
+  if (plan === 'free_demo' || plan === 'starter') {
+    return {
+      skipped: true,
+      reason: 'insufficient_plan',
+    };
+  }
+
   const userPayload = JSON.stringify(body);
   const estimatedInputTokens = Math.ceil(userPayload.length / 4);
   const estimatedOutputTokens = 1400;
@@ -1423,6 +1465,16 @@ async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env) {
       reason: 'cost_guard',
       estimatedCostUsd,
       maxCostUsd,
+    };
+  }
+
+  const gate = await assertAiBudgetForRoute(env, authUser, plan, '/study/ai/enhance');
+  if (!gate.allowed) {
+    return {
+      skipped: true,
+      reason: 'quota_limit',
+      code: gate.code,
+      upgradeOptions: gate.upgradeOptions,
     };
   }
 
@@ -1442,6 +1494,7 @@ async function runStudyAiEnhancement(body: Record<string, unknown>, env: Env) {
     user: userPayload,
     maxCompletionTokens: estimatedOutputTokens,
   });
+  await recordAiRouteCost(env, authUser, plan, '/study/ai/enhance', 'enhance', estimatedCostUsd);
   return {
     ...(parseModelJsonLoose<Record<string, unknown>>(raw) ?? {}),
     estimatedCostUsd,
@@ -1461,9 +1514,6 @@ export default {
         return jsonResponse({
           ok: true,
           worker: 'kalendulu-planner',
-          supabaseHost: new URL(env.SUPABASE_URL).host,
-          hasSupabaseKey: Boolean(env.SUPABASE_PUBLISHABLE_KEY),
-          hasOpenAiKey: Boolean(env.OPENAI_API_KEY),
         });
       }
 
@@ -1494,8 +1544,10 @@ export default {
         return errorResponse('Unauthorized', 401);
       }
 
+      const authoritativePlan = await resolveAuthoritativeStudyPlan(env, authUser);
+
       if (isStudyPageExtractionRoute) {
-        return handleStudyPageExtractionRoute(request, env);
+        return handleStudyPageExtractionRoute(request, env, authoritativePlan.plan);
       }
 
       if (isStudyV2Route) {
@@ -1504,7 +1556,7 @@ export default {
 
       if (isStudyExtractionRoute) {
         if (request.method === 'POST' && url.pathname === '/study/extractions') {
-          return runStudyExtraction(request, authUser.id ?? '');
+          return runStudyExtraction(request, authUser.id ?? '', authoritativePlan.plan);
         }
 
         const jobId = url.pathname.split('/').filter(Boolean).slice(-1)[0];
@@ -1528,7 +1580,7 @@ export default {
           const enhanced = await runStudyAiEnhancement({
             ...body,
             userId: authUser.id,
-          }, env);
+          }, env, authoritativePlan.plan, authUser);
           return jsonResponse(enhanced);
         } catch (error: any) {
           return errorResponse(error?.message ?? 'Study AI enhancement failed.', 502);
@@ -1545,6 +1597,10 @@ export default {
           kind === 'learn' ||
           kind === 'regenerate'
         ) {
+          const gate = await assertAiBudgetForRoute(env, authUser, authoritativePlan.plan, url.pathname);
+          if (!gate.allowed) {
+            return errorResponse(gate.message, 429, { code: gate.code, upgradeOptions: gate.upgradeOptions, reasons: gate.reasons });
+          }
           try {
             const generated = await runAdaptiveGoalEndpoint({
               kind,
@@ -1559,6 +1615,7 @@ export default {
               return errorResponse('Adaptive Goal model returned invalid JSON.', 502);
             }
 
+            await recordAiRouteCost(env, authUser, authoritativePlan.plan, url.pathname, kind, routeBudgetEstimateEur(url.pathname));
             return jsonResponse(generated);
           } catch (error: any) {
             return errorResponse(error?.message ?? 'Adaptive Goal request failed.', 502);
@@ -1574,6 +1631,11 @@ export default {
 
         if (!goal) {
           return errorResponse('Goal is required.', 400);
+        }
+
+        const gate = await assertAiBudgetForRoute(env, authUser, authoritativePlan.plan, url.pathname);
+        if (!gate.allowed) {
+          return errorResponse(gate.message, 429, { code: gate.code, upgradeOptions: gate.upgradeOptions, reasons: gate.reasons });
         }
 
         const system = refinementSystemPrompt(targetQuestionCount, goalType);
@@ -1629,6 +1691,7 @@ export default {
             },
           };
 
+          await recordAiRouteCost(env, authUser, authoritativePlan.plan, url.pathname, 'refine', routeBudgetEstimateEur(url.pathname));
           return jsonResponse(normalized);
         } catch {
           return jsonResponse(buildFallbackRefinement(goal, difficultyLevel));
@@ -1643,6 +1706,11 @@ export default {
 
         if (!goal) {
           return errorResponse('Goal is required.', 400);
+        }
+
+        const gate = await assertAiBudgetForRoute(env, authUser, authoritativePlan.plan, url.pathname);
+        if (!gate.allowed) {
+          return errorResponse(gate.message, 429, { code: gate.code, upgradeOptions: gate.upgradeOptions, reasons: gate.reasons });
         }
 
         const domain = inferDomain(goal);
@@ -1742,6 +1810,7 @@ export default {
             },
           };
 
+          await recordAiRouteCost(env, authUser, authoritativePlan.plan, url.pathname, 'plan', routeBudgetEstimateEur(url.pathname));
           return jsonResponse(normalizePlannerBundle(merged, targetStepCount));
         } catch {
           return jsonResponse(deterministicBundle);

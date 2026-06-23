@@ -710,11 +710,17 @@ export default function SettingsScreen() {
           onPress: () => {
             Alert.alert(
               "Endgültig bestätigen",
-              "Bitte bestätige die endgültige Löschung deines Accounts. Deine Ziele, Todos, Habits, Kalenderdaten, Fortschritte, Reflexionsdaten und lokalen Appdaten werden gelöscht.",
+              "Bitte bestätige die endgültige Löschung deines Accounts. Deine Ziele, Todos, Habits, Kalenderdaten, Fortschritte, Reflexionsdaten und lokalen Appdaten werden gelöscht.\n\nFalls du ein aktives Apple-Abo hast, wird die Abrechnung nicht automatisch durch die Account-Löschung beendet. Bitte kündige dein Abo vorher über „Abo verwalten“ in deinen Apple-Einstellungen. Du kannst den Account trotzdem sofort löschen.",
               [
                 {
                   text: "Abbrechen",
                   style: "cancel",
+                },
+                {
+                  text: "Abo verwalten",
+                  onPress: () => {
+                    void openSubscriptionManagement();
+                  },
                 },
                 {
                   text: "Account löschen",

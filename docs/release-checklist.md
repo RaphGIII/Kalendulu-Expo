@@ -5,10 +5,11 @@ Before TestFlight or App Store submission:
 1. Set all production EAS environment variables from `docs/env.production.md`.
 2. Deploy Supabase migrations.
 3. Deploy `delete-account` Edge Function.
-4. Deploy Cloudflare Worker.
-5. Confirm RevenueCat products, entitlements, and current Offering.
-6. Confirm App Store Connect subscriptions.
-7. Run:
+4. Deploy `revenuecat-webhook` Edge Function and configure the RevenueCat webhook secret.
+5. Deploy Cloudflare Worker.
+6. Confirm RevenueCat products, entitlements, and current Offering.
+7. Confirm App Store Connect subscriptions.
+8. Run:
 
 ```bash
 npm run validate:publish

@@ -44,13 +44,8 @@ serve(async (req: Request): Promise<Response> => {
     const supabaseServiceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
 
     if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
-      return jsonResponse(
-        {
-          error:
-            'Server is not configured. Missing SUPABASE_URL, SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY.',
-        },
-        500
-      );
+      console.error('delete-account configuration missing');
+      return jsonResponse({ error: 'Account deletion is temporarily unavailable.' }, 500);
     }
 
     const authHeader = req.headers.get('Authorization');
@@ -107,15 +102,16 @@ serve(async (req: Request): Promise<Response> => {
         .eq(column, value);
 
       if (error) {
+        console.error('delete-account row deletion failed', { table, column, optional, message: error.message });
         results.push({
           table,
           ok: false,
           optional,
-          error: error.message,
+          error: 'delete_failed',
         });
 
         if (!optional) {
-          throw new Error(`Failed to delete from ${table}: ${error.message}`);
+          throw new Error(`delete_failed:${table}`);
         }
 
         return;
@@ -135,8 +131,9 @@ serve(async (req: Request): Promise<Response> => {
       });
 
       if (error) {
-        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: error.message });
-        if (!optional) throw new Error(`Failed to list storage ${bucket}/${prefix}: ${error.message}`);
+        console.error('delete-account storage list failed', { bucket, prefix, optional, message: error.message });
+        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: 'storage_list_failed' });
+        if (!optional) throw new Error(`storage_list_failed:${bucket}`);
         return;
       }
 
@@ -151,8 +148,9 @@ serve(async (req: Request): Promise<Response> => {
 
       const { error: removeError } = await adminClient.storage.from(bucket).remove(paths);
       if (removeError) {
-        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: removeError.message });
-        if (!optional) throw new Error(`Failed to remove storage ${bucket}/${prefix}: ${removeError.message}`);
+        console.error('delete-account storage remove failed', { bucket, prefix, optional, message: removeError.message });
+        results.push({ table: `storage:${bucket}/${prefix}`, ok: false, optional, error: 'storage_remove_failed' });
+        if (!optional) throw new Error(`storage_remove_failed:${bucket}`);
         return;
       }
 
@@ -163,6 +161,7 @@ serve(async (req: Request): Promise<Response> => {
     await deleteRows('study_v2_projects', 'user_id', user.id, true);
     await deleteRows('api_cost_events', 'user_id', user.id, true);
     await deleteRows('user_ai_credit_ledger', 'user_id', user.id, true);
+    await deleteRows('user_subscription_status', 'user_id', user.id, true);
     await deleteRows('user_app_state', 'user_id', user.id, false);
     await deleteRows('profiles', 'id', user.id, false);
     await deleteStoragePrefix('study-temp', `study-temp/${user.id}`, true);
@@ -184,10 +183,10 @@ serve(async (req: Request): Promise<Response> => {
       await adminClient.auth.admin.deleteUser(user.id);
 
     if (deleteUserError) {
+      console.error('delete-account auth user deletion failed', deleteUserError.message);
       return jsonResponse(
         {
-          error: `Account could not be deleted: ${deleteUserError.message}`,
-          partialResults: results,
+          error: 'Account could not be deleted.',
         },
         500
       );
@@ -195,16 +194,12 @@ serve(async (req: Request): Promise<Response> => {
 
     return jsonResponse({
       success: true,
-      deletedUserId: user.id,
-      results,
     });
   } catch (error) {
+    console.error('delete-account failed', error);
     return jsonResponse(
       {
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Unknown account deletion error.',
+        error: 'Account deletion failed.',
       },
       500
     );

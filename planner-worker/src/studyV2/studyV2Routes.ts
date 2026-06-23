@@ -8,12 +8,13 @@ import { durationMs, logStudyStep, markStart } from './studyLogger';
 import { buildCorpusSummary, estimatedCost } from './studyAi';
 import { generateStudyPlanFromCorpus } from './studyPlanGenerator';
 import { getApiPricing } from '../shared/apiPricing';
+import { resolveAuthoritativeStudyPlan } from '../entitlements';
 import {
   assertStudyUsageAllowed,
   consumeAiCredits,
   recordApiCostEvent,
 } from './costTracking';
-import { getStudyPlanLimit, normalizeStudyBillingPlan } from './studyPlanLimits';
+import { getStudyPlanLimit } from './studyPlanLimits';
 import {
   countReadyProjects,
   deleteProjectBundle,
@@ -83,10 +84,6 @@ function detectFileType(file: File, fileName: string): StudyV2FileType | null {
   if (lower.endsWith('.txt') || file.type === 'text/plain') return 'txt';
   if (lower.endsWith('.md') || file.type === 'text/markdown') return 'md';
   return null;
-}
-
-function safeTier(value: FormDataEntryValue | null): StudyV2Tier {
-  return normalizeStudyBillingPlan(value);
 }
 
 function safeTargetLevel(value: unknown): StudyV2TargetLevel {
@@ -423,7 +420,8 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   const targetLevel = safeTargetLevel(form.get('targetLevel'));
   const weeklyHours = Math.max(1, Number(form.get('weeklyHours') ?? 8));
   const minutesPerLearningDay = Math.max(20, Number(form.get('minutesPerLearningDay') ?? 90));
-  const tier = safeTier(form.get('tier'));
+  const entitlement = await resolveAuthoritativeStudyPlan(env, user);
+  const tier = entitlement.plan as StudyV2Tier;
   const previewMode = tier === 'free_demo' || String(form.get('previewMode') ?? '').toLowerCase() === 'true';
   const maxPages = Math.max(1, Math.min(20, Number(form.get('maxPages') ?? getStudyPlanLimit(tier).freeSamplePages ?? 5)));
   const projectId = String(form.get('projectId') ?? '') || crypto.randomUUID();
@@ -440,7 +438,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     stage: 'tier_resolved',
     status: 'success',
     message: `Tarif ${limits.label} ermittelt.`,
-    details: { tier, readyProjectCount, maxBytes: limits.maxBytes, ocrAllowed: limits.ocrAllowed },
+    details: { tier, entitlementSource: entitlement.source, entitlementStatus: entitlement.status, readyProjectCount, maxBytes: limits.maxBytes, ocrAllowed: limits.ocrAllowed },
   });
   logStudyStep({
     requestId,
@@ -449,7 +447,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
     stage: 'files_received',
     status: files.length ? 'success' : 'error',
     message: `${files.length} Dateien empfangen.`,
-    details: { fileCount: files.length, totalBytes, fileNames: files.map((file) => file.name), fileTypes, previewMode, maxPages },
+    details: { fileCount: files.length, totalBytes, fileNames: files.map((file) => file.name), fileTypes, previewMode, maxPages, clientTierIgnored: String(form.get('tier') ?? '') || undefined },
   });
 
   updateReport(report, step('files', 'Dateien angenommen', files.length ? 'success' : 'error', `${files.length} Dateien · ${Math.round(totalBytes / 1024 / 1024 * 10) / 10} MB`, {
@@ -461,21 +459,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   if (!files.length) return fail('Bitte mindestens eine Datei hochladen.', 400, [],);
   if (fileTypes.some((item) => !item)) return fail('Mindestens ein Dateityp wird nicht unterstuetzt.', 400);
 
-  const usageGate = tier === 'free_demo'
-    ? {
-      allowed: true as const,
-      usage: {
-        computedCostEur: 0,
-        creditUsedEur: 0,
-        pagesProcessed: 0,
-        studyProjectCount: 0,
-        activeProjectCount: 0,
-        extraCreditRemainingEur: 0,
-        extraCreditRemainingUsd: 0,
-      },
-      limit: planLimit,
-    }
-    : await assertStudyUsageAllowed({
+  const usageGate = await assertStudyUsageAllowed({
       env,
       user,
       plan: tier,
@@ -656,9 +640,7 @@ async function handleIngest(request: Request, env: StudyV2Env, user: AuthUser, r
   };
 
   const summaryEstimatedUsd = estimatedCost(cleanedText.length, Math.min(14000, cleanedText.length / 3));
-  const summaryGate = tier === 'free_demo'
-    ? { allowed: true as const, usage: usageGate.usage, limit: usageGate.limit }
-    : await assertStudyUsageAllowed({
+  const summaryGate = await assertStudyUsageAllowed({
       env,
       user,
       plan: tier,
@@ -828,12 +810,11 @@ async function handleGeneratePlan(request: Request, env: StudyV2Env, user: AuthU
     summaryCharacters: corpus.summaryMarkdown?.length ?? 0,
   }));
 
-  const planTier = normalizeStudyBillingPlan(corpus.project?.tierSnapshot ?? body.tier ?? 'free_demo');
+  const entitlement = await resolveAuthoritativeStudyPlan(env, user);
+  const planTier = entitlement.plan;
   const planLimit = getStudyPlanLimit(planTier);
   const planEstimatedUsd = estimatedCost(corpus.summaryMarkdown?.length ?? 0, Math.min(12000, corpus.summaryMarkdown?.length ?? 0));
-  const planGate = planTier === 'free_demo'
-    ? { allowed: true as const, usage: { computedCostEur: 0, extraCreditRemainingEur: 0 }, limit: getStudyPlanLimit(planTier) }
-    : await assertStudyUsageAllowed({
+  const planGate = await assertStudyUsageAllowed({
       env,
       user,
       plan: planTier,

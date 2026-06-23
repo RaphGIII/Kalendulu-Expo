@@ -8,12 +8,14 @@ Kalendulu stores user-owned app data in:
 - study child tables scoped through `study_v2_projects.project_id`
 - `api_cost_events` with owner column `user_id`
 - `user_ai_credit_ledger` with owner column `user_id`
+- `user_subscription_status` with owner column `user_id`
 - private Storage bucket `study-temp`
 
 RLS requirements:
 
 - authenticated users can only read or mutate their own rows
 - cost events and credit ledger are server-written; users can read their own rows but cannot insert/update/delete
+- subscription status is server-written by RevenueCat webhook/admin code; users can read their own row but cannot insert/update/delete
 - study child rows are allowed only when their parent project belongs to `auth.uid()`
 - `study-temp` object paths are scoped to `study-temp/<user_id>/...`
 

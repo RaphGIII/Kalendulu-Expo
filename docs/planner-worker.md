@@ -17,6 +17,8 @@ Authentication:
 - Cost-generating routes require `Authorization: Bearer <Supabase access token>`.
 - The Worker verifies the JWT against Supabase `/auth/v1/user`.
 - Missing or invalid tokens return `401`.
+- The Worker resolves billing server-side from `user_subscription_status`.
+- Client-provided `tier`, `plan`, or `previewMode` values are never used as authoritative premium proof.
 
 Hardening:
 
@@ -26,11 +28,16 @@ Hardening:
 - Study V2 persistence uses the user access token for user-owned rows
 - API cost events are server-written
 
+CORS:
+
+- Worker responses currently use `Access-Control-Allow-Origin: *` because the primary client is a native iOS app, not a browser origin with cookies.
+- CORS is not used as a security boundary.
+- Security depends on Supabase bearer-token authentication, server-side plan resolution, RLS, and quota checks.
+- If a web client is introduced later, restrict CORS to the production web origins.
+
 Deploy:
 
 ```bash
 cd planner-worker
 npm run deploy
 ```
-
-Current quota enforcement still depends on the plan/tier supplied by the authenticated app request plus server-side usage ledgers. For strongest production enforcement, connect RevenueCat webhooks to Supabase and have the Worker read subscription state server-side.
