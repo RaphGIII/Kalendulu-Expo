@@ -1517,10 +1517,6 @@ export default function SettingsScreen() {
                 Fragen und Plaene zu erstellen.
               </Text>
               <Text style={styles.infoText}>
-                • Werbung: Vor KI-Erstellungen kann eine Rewarded Ad angezeigt
-                werden.
-              </Text>
-              <Text style={styles.infoText}>
                 • Kalender: JSON/ICS Import und Export, Laender-Feiertage und
                 farbige Termine.
               </Text>

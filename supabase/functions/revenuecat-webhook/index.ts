@@ -17,6 +17,23 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function ignoredResponse(reason: 'non_uuid_app_user_id' | 'unknown_user') {
+  return jsonResponse({ ok: true, ignored: true, reason });
+}
+
+function isUuid(value: unknown) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? ''));
+}
+
+function selectSupabaseUserId(event: any) {
+  const candidates = [
+    event?.app_user_id,
+    event?.original_app_user_id,
+    event?.subscriber_attributes?.supabase_user_id?.value,
+  ].map((value) => String(value ?? '').trim());
+  return candidates.find(isUuid) ?? null;
+}
+
 function productToPlan(productId?: string) {
   if (productId === 'kalendulu_starter_monthly') return 'starter';
   if (productId === 'kalendulu_plus_monthly') return 'plus';
@@ -88,8 +105,15 @@ serve(async (req: Request): Promise<Response> => {
   try {
     const body = await req.json();
     const event = body?.event ?? body;
-    const userId = String(event?.app_user_id ?? event?.subscriber_attributes?.supabase_user_id?.value ?? '');
-    if (!userId) return jsonResponse({ error: 'Missing app_user_id.' }, 400);
+    const userId = selectSupabaseUserId(event);
+    if (!userId) {
+      console.warn('revenuecat-webhook ignored non-uuid user id', {
+        appUserId: event?.app_user_id ?? null,
+        originalAppUserId: event?.original_app_user_id ?? null,
+        eventType: event?.type ?? null,
+      });
+      return ignoredResponse('non_uuid_app_user_id');
+    }
 
     const productId = typeof event?.product_id === 'string' ? event.product_id : null;
     const entitlementIds = Array.isArray(event?.entitlement_ids) ? event.entitlement_ids.map(String) : [];
@@ -104,6 +128,16 @@ serve(async (req: Request): Promise<Response> => {
     const supabase = createClient(supabaseUrl, serviceRole, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+
+    const { data: authUser, error: authUserError } = await supabase.auth.admin.getUserById(userId);
+    if (authUserError || !authUser?.user) {
+      console.warn('revenuecat-webhook ignored unknown user', {
+        userId,
+        eventType: event?.type ?? null,
+        hasAuthError: Boolean(authUserError),
+      });
+      return ignoredResponse('unknown_user');
+    }
 
     const { error } = await supabase.from('user_subscription_status').upsert({
       user_id: userId,

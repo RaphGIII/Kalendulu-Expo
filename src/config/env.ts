@@ -7,9 +7,7 @@ export type PublicEnvName =
   | 'EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL'
   | 'EXPO_PUBLIC_REVENUECAT_IOS_API_KEY'
   | 'EXPO_PUBLIC_DEV_AUTH_BYPASS'
-  | 'EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID'
-  | 'EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH'
-  | 'EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT';
+  | 'EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH';
 
 const warned = new Set<string>();
 
@@ -95,9 +93,7 @@ export const publicEnv = {
     validationMessage: 'must start with appl_',
   }),
   devAuthBypassRequested: rawPublicEnv('EXPO_PUBLIC_DEV_AUTH_BYPASS') === 'true',
-  admobRewardedIosAdUnitId: getPublicEnv('EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID'),
   aiFreeBlueprintsPerMonth: Number(rawPublicEnv('EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH') ?? 3) || 3,
-  aiRequiredRewardedAdsPerBlueprint: Number(rawPublicEnv('EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT') ?? 2) || 2,
 };
 
 export function getStudyApiUrl() {

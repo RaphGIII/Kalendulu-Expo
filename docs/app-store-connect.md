@@ -8,8 +8,8 @@ iOS first release settings:
 
 Ads and tracking:
 
-- Rewarded ads are configured with `requestNonPersonalizedAdsOnly: true`.
-- The app should be declared as using non-personalized ads unless personalized ad requests or IDFA tracking are added.
+- Google Mobile Ads and rewarded ads are disabled for v1.
+- Do not declare ads in App Store privacy answers unless a future build reintroduces an ad SDK.
 - If IDFA/tracking is introduced, add `NSUserTrackingUsageDescription` and an ATT prompt.
 
 Privacy answers should mention:
@@ -18,7 +18,6 @@ Privacy answers should mention:
 - user-generated goals, plans, todos, habits, calendar items
 - uploaded study files are processed temporarily
 - purchases/subscriptions through Apple/RevenueCat
-- non-personalized ads if enabled
 
 Legal URLs configured in the app:
 

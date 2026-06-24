@@ -10,7 +10,6 @@ Kalendulu is an Expo React Native app for goals, study planning, todos, habits, 
 - Supabase Auth, database, storage, and Edge Functions
 - Cloudflare Worker for AI planning, OCR, and study processing
 - RevenueCat for Apple subscription purchases
-- Google Mobile Ads rewarded ads, configured as non-personalized ad requests
 
 ## Local Setup
 
@@ -37,9 +36,7 @@ Production builds require:
 Optional:
 
 - `EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL`
-- `EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID`
 - `EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH`
-- `EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT`
 
 See `docs/env.production.md`.
 

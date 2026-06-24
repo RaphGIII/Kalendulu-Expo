@@ -12,9 +12,7 @@ Required EAS production environment variables:
 Optional public variables:
 
 - `EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL`: only set if study extraction uses a different Worker URL.
-- `EXPO_PUBLIC_ADMOB_REWARDED_IOS_AD_UNIT_ID`: iOS rewarded ad unit.
 - `EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH`
-- `EXPO_PUBLIC_AI_REQUIRED_REWARDED_ADS_PER_BLUEPRINT`
 
 Development-only:
 

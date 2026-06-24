@@ -1,6 +1,5 @@
-import { Alert, Platform } from "react-native";
+import { Alert } from "react-native";
 
-import { publicEnv } from "@/src/config/env";
 import { assertCanStartFreeAiBlueprint } from "@/src/monetization/aiQuota";
 
 export type AiAdGatePhase = "goal_refinement" | "planner_bundle";
@@ -12,146 +11,10 @@ type AiAdGateInput = {
   estimatedOutputTokens?: number;
 };
 
-const REQUIRED_ADS_PER_BLUEPRINT =
-  publicEnv.aiRequiredRewardedAdsPerBlueprint;
-
-function getRewardedAdUnitId() {
-  if (Platform.OS !== "ios") {
-    throw new Error("Rewarded Ads sind aktuell nur für iOS konfiguriert.");
-  }
-
-  return (
-    publicEnv.admobRewardedIosAdUnitId
-  );
-}
-
-function phaseToAdNumber(phase: AiAdGatePhase) {
-  return phase === "goal_refinement" ? 1 : 2;
-}
-
-function phaseToRewardText(phase: AiAdGatePhase) {
-  if (phase === "goal_refinement") {
-    return "die KI-Fragen zu deinem Ziel";
-  }
-
-  return "deinen vollständigen KI-Zielplan";
-}
-
-function confirmRewardedAdDisclosure(phase: AiAdGatePhase) {
-  const adNumber = phaseToAdNumber(phase);
-  const reward = phaseToRewardText(phase);
-
-  return new Promise<void>((resolve, reject) => {
-    Alert.alert(
-      `Anzeige ${adNumber}/${REQUIRED_ADS_PER_BLUEPRINT}`,
-      `Sieh dir diese kurze Anzeige vollständig an, um ${reward} freizuschalten.`,
-      [
-        {
-          text: "Abbrechen",
-          style: "cancel",
-          onPress: () => reject(new Error("Anzeige abgebrochen.")),
-        },
-        {
-          text: "Anzeige ansehen",
-          onPress: () => resolve(),
-        },
-      ],
-      { cancelable: true },
-    );
-  });
-}
-
-async function showRewardedAdOnce(): Promise<void> {
-  const ads = await import("react-native-google-mobile-ads");
-  if (__DEV__) console.log("[ads] loaded");
-  const adUnitId = getRewardedAdUnitId() ?? ads.TestIds.REWARDED;
-
-  return new Promise((resolve, reject) => {
-    let earnedReward = false;
-    let settled = false;
-
-    const rewarded = ads.RewardedAd.createForAdRequest(adUnitId, {
-      requestNonPersonalizedAdsOnly: true,
-    });
-
-    const unsubscribeLoaded = rewarded.addAdEventListener(
-      ads.RewardedAdEventType.LOADED,
-      () => {
-        rewarded.show().catch(() => {
-          settleError(new Error("Anzeige konnte nicht geöffnet werden."));
-        });
-      },
-    );
-
-    const unsubscribeEarned = rewarded.addAdEventListener(
-      ads.RewardedAdEventType.EARNED_REWARD,
-      () => {
-        earnedReward = true;
-      },
-    );
-
-    const unsubscribeClosed = rewarded.addAdEventListener(
-      ads.AdEventType.CLOSED,
-      () => {
-        if (earnedReward) {
-          settleSuccess();
-        } else {
-          settleError(
-            new Error(
-              "Die Anzeige wurde nicht vollständig angesehen. Die KI-Funktion wurde nicht freigeschaltet.",
-            ),
-          );
-        }
-      },
-    );
-
-    const unsubscribeError = rewarded.addAdEventListener(
-      ads.AdEventType.ERROR,
-      () => {
-        settleError(
-          new Error(
-            "Aktuell ist keine Anzeige verfügbar. Bitte versuche es später erneut.",
-          ),
-        );
-      },
-    );
-
-    const timeout = setTimeout(() => {
-      settleError(
-        new Error(
-          "Die Anzeige konnte nicht rechtzeitig geladen werden. Bitte versuche es später erneut.",
-        ),
-      );
-    }, 20000);
-
-    function cleanup() {
-      clearTimeout(timeout);
-      unsubscribeLoaded();
-      unsubscribeEarned();
-      unsubscribeClosed();
-      unsubscribeError();
-    }
-
-    function settleSuccess() {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve();
-    }
-
-    function settleError(error: Error) {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    }
-
-    rewarded.load();
-  });
-}
+const ADS_UNAVAILABLE_MESSAGE = "Werbung ist in dieser Version nicht verfuegbar.";
 
 export function calculateRequiredAiAds() {
-  return REQUIRED_ADS_PER_BLUEPRINT;
+  return 0;
 }
 
 export async function requireAiAds(input: AiAdGateInput) {
@@ -159,8 +22,6 @@ export async function requireAiAds(input: AiAdGateInput) {
     await assertCanStartFreeAiBlueprint();
   }
 
-  await confirmRewardedAdDisclosure(input.phase);
-  await showRewardedAdOnce();
-
-  return phaseToAdNumber(input.phase);
+  Alert.alert("Werbung nicht verfuegbar", ADS_UNAVAILABLE_MESSAGE);
+  throw new Error(ADS_UNAVAILABLE_MESSAGE);
 }
