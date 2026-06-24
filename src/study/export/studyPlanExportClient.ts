@@ -1,9 +1,17 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Document, HeadingLevel, Packer, Paragraph, TextRun } from 'docx';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 import type { StudyPlan, StudyProject, KnowledgeUnit } from '../types';
+
+type PdfLibModule = typeof import('pdf-lib');
+
+async function loadPdfLib() {
+  // pdf-lib's ESM build crashes in Expo Web/Metro because of its nested tslib export.
+  // CommonJS is loaded lazily so normal app startup never imports pdf-lib.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('pdf-lib/cjs') as PdfLibModule;
+}
 
 function safeFilePart(value: string) {
   return value.replace(/[^a-z0-9-_]+/gi, '-').replace(/-+/g, '-').slice(0, 60);
@@ -109,6 +117,7 @@ export async function exportStudyPlanAsPdf(input: {
 }) {
   const name = `Kalendulu-Lernplan-${safeFilePart(input.project.title)}-${new Date().toISOString().slice(0, 10)}.pdf`;
   const uri = `${FileSystem.cacheDirectory}${name}`;
+  const { PDFDocument, StandardFonts, rgb } = await loadPdfLib();
   const pdf = await PDFDocument.create();
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);

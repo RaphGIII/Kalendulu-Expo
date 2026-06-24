@@ -40,6 +40,7 @@ import {
 import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { ThemeColors } from "@/src/theme/themes";
 import { LEGAL_LINKS } from "@/src/config/legalLinks";
+import { requestOnboardingReplay } from "@/src/onboarding/onboardingStorage";
 import {
   openSubscriptionManagement,
   premiumProductIds,
@@ -1550,6 +1551,15 @@ export default function SettingsScreen() {
     title="Support / Kontakt"
     subtitle="Hilfe, Kontakt und Datenanfragen"
     onPress={() => openExternalUrl(LEGAL_LINKS.support)}
+    colors={colors}
+    fontFamily={fontFamily}
+  />
+  <View style={styles.separatorInner} />
+
+  <SettingsEntry
+    title="Tutorial erneut ansehen"
+    subtitle="Theme, Schrift, Kalender, To-dos und Lernen noch einmal anzeigen"
+    onPress={requestOnboardingReplay}
     colors={colors}
     fontFamily={fontFamily}
   />

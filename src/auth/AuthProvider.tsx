@@ -1,8 +1,14 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Session, User } from '@supabase/supabase-js';
 
 import { supabase } from '@/src/lib/supabase';
 import { DEV_AUTH_BYPASS } from '@/src/config/auth';
+import {
+  clearSessionBackup,
+  isUsableSession,
+  loadSessionBackup,
+  saveSessionBackup,
+} from '@/src/auth/authSessionBackup';
 
 type RegisterInput = {
   email: string;
@@ -58,12 +64,35 @@ async function fetchProfileName(userId: string): Promise<string> {
   }
 }
 
+function withAuthTimeout<T>(request: Promise<T>): Promise<T> {
+  return Promise.race([
+    request,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => {
+        reject(new Error('Die Anmeldung dauert zu lange. Bitte pruefe deine Internetverbindung und versuche es erneut.'));
+      }, 15000);
+    }),
+  ]);
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authReady, setAuthReady] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [fullName, setFullName] = useState('');
+  const authGenerationRef = useRef(0);
+  const authRequestInFlightRef = useRef(false);
+  const explicitSignOutRef = useRef(false);
+  const lastAcceptedSessionAtRef = useRef(0);
 
   const user = DEV_AUTH_BYPASS ? devBypassUser : session?.user ?? null;
+
+  const acceptSession = useCallback((nextSession: Session | null) => {
+    if (nextSession?.user) {
+      lastAcceptedSessionAtRef.current = Date.now();
+      void saveSessionBackup(nextSession);
+    }
+    setSession(nextSession);
+  }, []);
 
   const refreshProfile = useCallback(async () => {
     if (DEV_AUTH_BYPASS) {
@@ -100,20 +129,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const bootstrap = async () => {
+      const bootstrapGeneration = authGenerationRef.current;
+
       try {
         const { data } = await supabase.auth.getSession();
 
         if (!mounted) return;
+        if (bootstrapGeneration !== authGenerationRef.current) return;
 
-        setSession(data.session);
+        let bootSession = data.session;
 
-        if (data.session?.user?.id) {
-          const profileName = await fetchProfileName(data.session.user.id);
+        if (!isUsableSession(bootSession)) {
+          const backupSession = await loadSessionBackup();
           if (!mounted) return;
+          if (bootstrapGeneration !== authGenerationRef.current) return;
+
+          if (backupSession) {
+            const { data: restored } = await supabase.auth.setSession({
+              access_token: backupSession.access_token,
+              refresh_token: backupSession.refresh_token,
+            });
+            if (!mounted) return;
+            if (bootstrapGeneration !== authGenerationRef.current) return;
+            bootSession = restored.session ?? backupSession;
+          }
+        }
+
+        acceptSession(bootSession);
+
+        if (bootSession?.user?.id) {
+          const profileName = await fetchProfileName(bootSession.user.id);
+          if (!mounted) return;
+          if (bootstrapGeneration !== authGenerationRef.current) return;
 
           const fallbackName =
-            (data.session.user.user_metadata?.full_name as string | undefined) ||
-            (data.session.user.user_metadata?.name as string | undefined) ||
+            (bootSession.user.user_metadata?.full_name as string | undefined) ||
+            (bootSession.user.user_metadata?.name as string | undefined) ||
             '';
 
           setFullName(profileName || fallbackName || '');
@@ -126,7 +177,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         if (!mounted) return;
-        setSession(null);
+        if (bootstrapGeneration !== authGenerationRef.current) return;
+        acceptSession(null);
         setFullName('');
         setAuthReady(true);
       }
@@ -136,8 +188,52 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_, nextSession) => {
-      setSession(nextSession);
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      const isStaleNullSession =
+        !nextSession?.user &&
+        (authRequestInFlightRef.current || Date.now() - lastAcceptedSessionAtRef.current < 10000) &&
+        !explicitSignOutRef.current;
+
+      if (isStaleNullSession) {
+        setAuthReady(true);
+        return;
+      }
+
+      if (!nextSession?.user && !explicitSignOutRef.current) {
+        void loadSessionBackup()
+          .then(async (backupSession) => {
+            if (!backupSession) {
+              acceptSession(null);
+              setFullName('');
+              setAuthReady(true);
+              return;
+            }
+
+            const { data: restored } = await supabase.auth.setSession({
+              access_token: backupSession.access_token,
+              refresh_token: backupSession.refresh_token,
+            });
+
+            const restoredSession = restored.session ?? backupSession;
+            acceptSession(restoredSession);
+
+            const fallbackName =
+              (restoredSession.user.user_metadata?.full_name as string | undefined) ||
+              (restoredSession.user.user_metadata?.name as string | undefined) ||
+              '';
+
+            setFullName(fallbackName || '');
+            setAuthReady(true);
+          })
+          .catch(() => {
+            acceptSession(null);
+            setFullName('');
+            setAuthReady(true);
+          });
+        return;
+      }
+
+      acceptSession(nextSession);
 
       if (!nextSession?.user) {
         setFullName('');
@@ -163,51 +259,94 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [acceptSession]);
 
-  const signIn = async ({ email, password }: LoginInput) => {
+  const signIn = useCallback(async ({ email, password }: LoginInput) => {
     if (DEV_AUTH_BYPASS) return;
 
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
-    });
+    explicitSignOutRef.current = false;
+    authRequestInFlightRef.current = true;
+    authGenerationRef.current += 1;
 
-    if (error) {
-      throw new Error(error.message);
+    try {
+      const { data, error } = await withAuthTimeout(
+        supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        }),
+      );
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (data.session) {
+        acceptSession(data.session);
+        setAuthReady(true);
+      }
+    } finally {
+      authRequestInFlightRef.current = false;
     }
-  };
+  }, [acceptSession]);
 
-  const signUp = async ({ email, password, fullName }: RegisterInput) => {
+  const signUp = useCallback(async ({ email, password, fullName }: RegisterInput) => {
     if (DEV_AUTH_BYPASS) return;
 
     const trimmedEmail = email.trim();
     const trimmedName = fullName.trim();
 
-    const { error } = await supabase.auth.signUp({
-      email: trimmedEmail,
-      password,
-      options: {
-        data: {
-          full_name: trimmedName,
-        },
-      },
-    });
+    explicitSignOutRef.current = false;
+    authRequestInFlightRef.current = true;
+    authGenerationRef.current += 1;
 
-    if (error) {
-      throw new Error(error.message);
+    try {
+      const { data, error } = await withAuthTimeout(
+        supabase.auth.signUp({
+          email: trimmedEmail,
+          password,
+          options: {
+            data: {
+              full_name: trimmedName,
+            },
+          },
+        }),
+      );
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      if (data.session) {
+        acceptSession(data.session);
+        setAuthReady(true);
+      }
+    } finally {
+      authRequestInFlightRef.current = false;
     }
-  };
+  }, [acceptSession]);
 
-  const signOut = async () => {
+  const signOut = useCallback(async () => {
     if (DEV_AUTH_BYPASS) return;
 
-    const { error } = await supabase.auth.signOut();
+    authRequestInFlightRef.current = false;
+    explicitSignOutRef.current = true;
+    authGenerationRef.current += 1;
+    await clearSessionBackup();
 
-    if (error) {
-      throw new Error(error.message);
+    try {
+      const { error } = await supabase.auth.signOut();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      acceptSession(null);
+      setFullName('');
+      setAuthReady(true);
+    } finally {
+      explicitSignOutRef.current = false;
     }
-  };
+  }, [acceptSession]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -220,7 +359,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       signOut,
       refreshProfile,
     }),
-    [authReady, session, user, fullName, refreshProfile]
+    [authReady, session, user, fullName, signIn, signUp, signOut, refreshProfile]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

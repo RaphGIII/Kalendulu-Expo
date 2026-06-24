@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
@@ -15,7 +14,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 
 import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
@@ -24,6 +23,7 @@ const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
+  const router = useRouter();
 
   const { height } = useWindowDimensions();
 
@@ -35,6 +35,7 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<'email' | null>(null);
+  const [formError, setFormError] = useState('');
 
   const authErrorMessage = (error: any) => {
     const message = String(error?.message ?? error ?? '').toLowerCase();
@@ -48,17 +49,20 @@ export default function LoginScreen() {
   };
 
   const onLogin = async () => {
+    setFormError('');
+
     if (!email.trim() || !password.trim()) {
-      Alert.alert('Fehlende Angaben', 'Bitte E-Mail und Passwort eingeben.');
+      setFormError('Bitte E-Mail und Passwort eingeben.');
       return;
     }
 
     try {
       setBusy('email');
       await signIn({ email, password });
+      router.replace('/kalender');
     } catch (error: any) {
       console.warn('Email login failed:', error);
-      Alert.alert('Login fehlgeschlagen', authErrorMessage(error));
+      setFormError(authErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -129,8 +133,11 @@ export default function LoginScreen() {
                     placeholder="Passwort"
                     placeholderTextColor="#91A0BB"
                     secureTextEntry
+                    onSubmitEditing={onLogin}
                     style={styles.input}
                   />
+
+                  {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
                   <Pressable
                     onPress={onLogin}
@@ -258,5 +265,12 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.72,
+  },
+  errorText: {
+    color: '#B42318',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 8,
   },
 });

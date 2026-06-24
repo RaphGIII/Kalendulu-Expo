@@ -18,6 +18,7 @@ import { router } from 'expo-router';
 
 import { useAppTheme } from '../theme/ThemeProvider';
 import { PAYWALL_COPY, useSubscription, type PaywallReason } from '../billing';
+import { subscribeToOnboardingAction } from '../onboarding/onboardingRuntime';
 import {
   applyFullGoalPlan,
   loadCalendarEventsBestEffort,
@@ -1211,6 +1212,33 @@ export default function StudyScreen() {
     resetCreateForm();
     setMode('create');
   }
+
+  useEffect(() => {
+    return subscribeToOnboardingAction((action) => {
+      if (action === 'openStudyCreate') {
+        resetCreateForm();
+        setMode('create');
+      }
+
+      if (
+        action === 'openStudyCreate' ||
+        action === 'scrollStudyCreateTop' ||
+        action === 'scrollStudyCreateMaterial' ||
+        action === 'scrollStudyCreateSubmit'
+      ) {
+        const y =
+          action === 'scrollStudyCreateMaterial'
+            ? 380
+            : action === 'scrollStudyCreateSubmit'
+              ? 560
+              : 0;
+
+        requestAnimationFrame(() => {
+          scrollRef.current?.scrollTo({ y, animated: action !== 'openStudyCreate' });
+        });
+      }
+    });
+  }, []);
 
   function confirmRemoveProject(project: StudyProject) {
     Alert.alert(

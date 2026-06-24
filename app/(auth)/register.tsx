@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   ImageBackground,
   KeyboardAvoidingView,
   Platform,
@@ -16,7 +15,7 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 
 import AuthArtwork from '@/src/components/auth/AuthArtwork';
 import { useAuth } from '@/src/auth/AuthProvider';
@@ -25,6 +24,7 @@ const backgroundAsset = require('../../assets/auth/background-portrait.png');
 
 export default function RegisterScreen() {
   const { signUp } = useAuth();
+  const router = useRouter();
 
   const { height } = useWindowDimensions();
 
@@ -37,6 +37,7 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState<'email' | null>(null);
+  const [formError, setFormError] = useState('');
 
   const authErrorMessage = (error: any) => {
     const message = String(error?.message ?? error ?? '').toLowerCase();
@@ -50,22 +51,25 @@ export default function RegisterScreen() {
   };
 
   const onRegister = async () => {
+    setFormError('');
+
     if (!fullName.trim() || !email.trim() || !password.trim()) {
-      Alert.alert('Fehlende Angaben', 'Bitte Name, E-Mail und Passwort eingeben.');
+      setFormError('Bitte Name, E-Mail und Passwort eingeben.');
       return;
     }
 
     if (password.length < 8) {
-      Alert.alert('Passwort zu kurz', 'Das Passwort sollte mindestens 8 Zeichen haben.');
+      setFormError('Das Passwort sollte mindestens 8 Zeichen haben.');
       return;
     }
 
     try {
       setBusy('email');
       await signUp({ fullName, email, password });
+      router.replace('/kalender');
     } catch (error: any) {
       console.warn('Email registration failed:', error);
-      Alert.alert('Registrierung fehlgeschlagen', authErrorMessage(error));
+      setFormError(authErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -146,8 +150,10 @@ export default function RegisterScreen() {
                     placeholder="Mindestens 8 Zeichen"
                     placeholderTextColor="#91A0BB"
                     secureTextEntry
+                    onSubmitEditing={onRegister}
                     style={styles.input}
                   />
+                  {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
                   <Text style={{ marginTop: 14, textAlign: "center", fontSize: 12, color: "#8A8A8A" }}>
   Mit der Registrierung stimmst du unserer{" "}
   <Text
@@ -284,5 +290,12 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     opacity: 0.72,
+  },
+  errorText: {
+    color: '#B42318',
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 8,
   },
 });

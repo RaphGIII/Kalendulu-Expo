@@ -5,6 +5,7 @@ import { router } from 'expo-router';
 
 import { useAppTheme } from '@/src/theme/ThemeProvider';
 import { LEGAL_LINKS } from '@/src/config/legalLinks';
+import { requestOnboardingReplay } from '@/src/onboarding/onboardingStorage';
 
 type MoreItem = {
   icon: keyof typeof Ionicons.glyphMap;
@@ -43,6 +44,12 @@ export default function MoreScreen() {
       title: 'Premium',
       description: 'Grosse Skripte, Exporte und KI-Veredelung freischalten.',
       onPress: () => router.push('/premium'),
+    },
+    {
+      icon: 'map-outline',
+      title: 'Tutorial erneut ansehen',
+      description: 'Theme, Schrift, Kalender, To-dos und Lernen noch einmal kurz erklaert.',
+      onPress: requestOnboardingReplay,
     },
     {
       icon: 'help-buoy-outline',
