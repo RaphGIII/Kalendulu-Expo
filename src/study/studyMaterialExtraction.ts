@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 
-import type { UserStudyTier } from '../billing';
+import type { UserStudyTier } from '../billing/types';
 import { startPageLearningExtraction } from './pageLearningExtraction';
 import type { DetectedStudySection } from './types';
 

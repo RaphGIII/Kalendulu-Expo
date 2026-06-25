@@ -110,7 +110,7 @@ export function useTodo() {
       }
       setState(DEFAULT_STATE);
     } catch (e) {
-      console.log('Failed to load todo state', e);
+      if (__DEV__) console.warn('Failed to load todo state', e);
       setState(DEFAULT_STATE);
     } finally {
       setHydrated(true);
@@ -131,7 +131,9 @@ export function useTodo() {
     if (!hydrated) return;
     AsyncStorage.setItem(TODO_STORAGE_KEY, JSON.stringify(state))
       .then(() => saveCloudState(TODO_STORAGE_KEY, state))
-      .catch((e) => console.log('Failed to save todo state', e));
+      .catch((e) => {
+        if (__DEV__) console.warn('Failed to save todo state', e);
+      });
   }, [state, hydrated]);
 
   const categoriesWithCounts = useMemo(() => {

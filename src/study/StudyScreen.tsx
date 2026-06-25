@@ -17,7 +17,9 @@ import 'dayjs/locale/de';
 import { router } from 'expo-router';
 
 import { useAppTheme } from '../theme/ThemeProvider';
-import { PAYWALL_COPY, useSubscription, type PaywallReason } from '../billing';
+import { PAYWALL_COPY } from '../billing/paywallConfig';
+import type { PaywallReason } from '../billing/types';
+import { useSubscription } from '../billing/useSubscription';
 import { subscribeToOnboardingAction } from '../onboarding/onboardingRuntime';
 import {
   applyFullGoalPlan,

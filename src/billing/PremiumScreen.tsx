@@ -7,23 +7,20 @@ import type { CustomerInfo, PurchasesPackage } from 'react-native-purchases';
 import { useAuth } from '../auth/AuthProvider';
 import { LEGAL_LINKS } from '../config/legalLinks';
 import { useAppTheme } from '../theme/ThemeProvider';
+import { REVENUECAT_PRODUCTS, tierFromProduct } from './entitlements';
+import { configureRevenueCat, getPurchases, getRevenueCatClientDebugInfo } from './revenueCatClient';
 import {
-  configureRevenueCat,
-  getPurchases,
   getActiveKalenduluPlan,
   getRevenueCatOffering,
-  getRevenueCatClientDebugInfo,
   openSubscriptionManagement,
   purchaseRevenueCatPackage,
   purchaseRevenueCatProduct,
-  REVENUECAT_PRODUCTS,
   resolvePlanFromCustomerInfo,
   restoreRevenueCatPurchases,
   syncSubscriptionStatusFromCustomerInfo,
-  tierFromProduct,
-  useSubscription,
-} from './index';
+} from './subscriptionService';
 import type { UserStudyTier } from './types';
+import { useSubscription } from './useSubscription';
 
 const SHOW_REVENUECAT_DEBUG = __DEV__;
 

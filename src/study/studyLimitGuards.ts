@@ -1,5 +1,5 @@
-import type { PaywallReason, StudyTierLimits, UserStudyTier } from '../billing';
-import { STUDY_TIER_LIMITS } from '../billing';
+import { STUDY_TIER_LIMITS } from '../billing/entitlements';
+import type { PaywallReason, StudyTierLimits, UserStudyTier } from '../billing/types';
 import type { StudyUsageMonth } from './studyUsage';
 
 export function estimatePagesFromFile(input: { name: string; size?: number }) {

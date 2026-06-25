@@ -51,13 +51,13 @@ export function useSubscription() {
         if (mounted) setStatus(cached);
       })
       .finally(() => {
-        if (mounted) void refresh();
+        if (mounted) setLoading(false);
       });
 
     return () => {
       mounted = false;
     };
-  }, [refresh]);
+  }, []);
 
   const effectiveStatus = status ?? FALLBACK_STATUS;
 

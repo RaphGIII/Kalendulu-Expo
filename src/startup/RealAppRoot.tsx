@@ -6,7 +6,6 @@ import { StatusBar } from 'expo-status-bar';
 
 import { ThemeProvider, useAppTheme } from '@/src/theme/ThemeProvider';
 import { AuthProvider, useAuth } from '@/src/auth/AuthProvider';
-import { BillingBootstrapper } from '@/src/billing';
 import AppExperienceGate from '@/src/startup/AppExperienceGate';
 
 function AppNavigator() {
@@ -61,9 +60,7 @@ export default function RealAppRoot() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <AuthProvider>
-          <BillingBootstrapper>
-            <AppNavigator />
-          </BillingBootstrapper>
+          <AppNavigator />
         </AuthProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

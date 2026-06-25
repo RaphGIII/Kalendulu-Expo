@@ -8,11 +8,16 @@ Required EAS production environment variables:
 - `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`: Supabase publishable/anon client key.
 - `EXPO_PUBLIC_PLANNER_API_URL`: Cloudflare Worker base URL.
 - `EXPO_PUBLIC_REVENUECAT_IOS_API_KEY`: RevenueCat iOS public SDK key, must start with `appl_`.
+- `EXPO_PUBLIC_LEGAL_OPERATOR_NAME`: public operator name for privacy policy and imprint.
+- `EXPO_PUBLIC_LEGAL_OPERATOR_ADDRESS`: public operator address for privacy policy and imprint.
+- `EXPO_PUBLIC_LEGAL_OPERATOR_EMAIL`: public support/legal contact email.
+- `EXPO_PUBLIC_LEGAL_OPERATOR_COUNTRY`: public operator country.
 
 Optional public variables:
 
 - `EXPO_PUBLIC_STUDY_EXTRACTOR_API_URL`: only set if study extraction uses a different Worker URL.
 - `EXPO_PUBLIC_AI_FREE_BLUEPRINTS_PER_MONTH`
+- `EXPO_PUBLIC_LEGAL_LAST_UPDATED`: displayed legal text date, for example `24.06.2026`.
 
 Development-only:
 

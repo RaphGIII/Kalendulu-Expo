@@ -1,4 +1,5 @@
-import { STUDY_TIER_LIMITS, type UserStudyTier } from '../billing';
+import { STUDY_TIER_LIMITS } from '../billing/entitlements';
+import type { UserStudyTier } from '../billing/types';
 
 export type StudyTierLimitValidation = {
   tier: UserStudyTier;

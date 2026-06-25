@@ -102,7 +102,7 @@ export function useEvents() {
         await saveCloudState(STORAGE_KEYS.CALENDAR_EVENTS, normalizedList);
       }
     } catch (e) {
-      console.log('Failed to load calendar events', e);
+      if (__DEV__) console.warn('Failed to load calendar events', e);
       setEvents([]);
     }
   }, []);
@@ -112,7 +112,7 @@ export function useEvents() {
       await AsyncStorage.setItem(STORAGE_KEYS.CALENDAR_EVENTS, JSON.stringify(next));
       await saveCloudState(STORAGE_KEYS.CALENDAR_EVENTS, next);
     } catch (e) {
-      console.log('Failed to save calendar events', e);
+      if (__DEV__) console.warn('Failed to save calendar events', e);
     }
   }, []);
 

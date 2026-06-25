@@ -9,7 +9,6 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import Svg, { Line, Polygon } from 'react-native-svg';
 
 import { emitOnboardingAction } from '@/src/onboarding/onboardingRuntime';
 import { useAppTheme } from '@/src/theme/ThemeProvider';
@@ -432,7 +431,7 @@ export default function OnboardingOverlay({ visible, onComplete }: OnboardingOve
           ]}
         />
 
-        <StraightArrow target={target} bubble={bubble} color={colors.primary} width={width} height={height} />
+        <StraightArrow target={target} bubble={bubble} color={colors.primary} />
 
         <View style={[styles.explainer, { left: bubble.x, top: bubble.y, width: bubble.width, minHeight: bubble.height }]}>
           <Text style={styles.explainerTitle}>{guidedStep.title}</Text>
@@ -513,14 +512,10 @@ function StraightArrow({
   target,
   bubble,
   color,
-  width,
-  height,
 }: {
   target: SpotlightTarget;
   bubble: { x: number; y: number; width: number; height: number };
   color: string;
-  width: number;
-  height: number;
 }) {
   const targetCenterX = target.x + target.width / 2;
   const targetCenterY = target.y + target.height / 2;
@@ -533,28 +528,71 @@ function StraightArrow({
   const dx = targetCenterX - nearestX;
   const dy = targetCenterY - nearestY;
   const length = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-  const maxArrowLength = 118;
-  const drawnLength = Math.min(length - 26, maxArrowLength);
-  if (drawnLength < 28) return null;
+  if (length < 46) return null;
 
-  const endX = targetCenterX - (dx / length) * 26;
-  const endY = targetCenterY - (dy / length) * 26;
-  const startX = endX - (dx / length) * drawnLength;
-  const startY = endY - (dy / length) * drawnLength;
-  const angle = Math.atan2(dy, dx);
-  const size = 9;
-  const leftX = endX - Math.cos(angle - Math.PI / 6) * size;
-  const leftY = endY - Math.sin(angle - Math.PI / 6) * size;
-  const rightX = endX - Math.cos(angle + Math.PI / 6) * size;
-  const rightY = endY - Math.sin(angle + Math.PI / 6) * size;
+  const endX = targetCenterX - (dx / length) * 24;
+  const endY = targetCenterY - (dy / length) * 24;
+  const midY = nearestY + (endY - nearestY) * 0.58;
+  const verticalOne = {
+    left: nearestX - 1.5,
+    top: Math.min(nearestY, midY),
+    width: 3,
+    height: Math.abs(midY - nearestY),
+  };
+  const horizontal = {
+    left: Math.min(nearestX, endX),
+    top: midY - 1.5,
+    width: Math.abs(endX - nearestX),
+    height: 3,
+  };
+  const verticalTwo = {
+    left: endX - 1.5,
+    top: Math.min(midY, endY),
+    width: 3,
+    height: Math.abs(endY - midY),
+  };
+  const arrowDown = targetCenterY > nearestY;
 
   return (
-    <Svg pointerEvents="none" width={width} height={height} style={StyleSheet.absoluteFill}>
-      <Line x1={startX} y1={startY} x2={endX} y2={endY} stroke={color} strokeWidth={3} strokeLinecap="round" opacity={0.9} />
-      <Polygon points={`${endX},${endY} ${leftX},${leftY} ${rightX},${rightY}`} fill={color} />
-    </Svg>
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <View style={[connectorLineStyle, verticalOne, { backgroundColor: color }]} />
+      <View style={[connectorLineStyle, horizontal, { backgroundColor: color }]} />
+      <View style={[connectorLineStyle, verticalTwo, { backgroundColor: color }]} />
+      <View
+        style={[
+          connectorArrowStyle,
+          {
+            left: endX - 7,
+            top: arrowDown ? endY - 2 : endY - 10,
+            borderLeftColor: 'transparent',
+            borderRightColor: 'transparent',
+            borderTopColor: arrowDown ? color : 'transparent',
+            borderBottomColor: arrowDown ? 'transparent' : color,
+          },
+        ]}
+      />
+    </View>
   );
 }
+
+const connectorLineStyle = {
+  position: 'absolute' as const,
+  zIndex: 4,
+  borderRadius: 999,
+  opacity: 0.82,
+};
+
+const connectorArrowStyle = {
+  position: 'absolute' as const,
+  zIndex: 4,
+  width: 0,
+  height: 0,
+  borderLeftWidth: 7,
+  borderRightWidth: 7,
+  borderTopWidth: 10,
+  borderBottomWidth: 10,
+  opacity: 0.86,
+};
 
 function makeStyles(
   colors: ReturnType<typeof useAppTheme>['colors'],

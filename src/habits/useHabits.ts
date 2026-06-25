@@ -220,7 +220,7 @@ export function useHabits() {
       const saved = await loadHabitsState();
       setState(normalizeState(saved));
     } catch (e) {
-      console.log('Failed to load habits state', e);
+      if (__DEV__) console.warn('Failed to load habits state', e);
       setState(DEFAULT_STATE);
     } finally {
       setHydrated(true);

@@ -1,6 +1,6 @@
 import { buildAuthenticatedJsonHeaders } from '../lib/apiAuth';
 import { getStudyApiUrl } from '../config/env';
-import type { UserStudyTier } from '../billing';
+import type { UserStudyTier } from '../billing/types';
 import type { DetectedStudySection } from './types';
 
 export type StudyExtractionResult = {

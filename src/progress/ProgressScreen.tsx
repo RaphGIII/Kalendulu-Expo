@@ -381,7 +381,7 @@ export default function ProgressScreen({ navigation }: Props) {
         }
       }
     } catch (error) {
-      console.log('Meta laden fehlgeschlagen', error);
+      if (__DEV__) console.warn('Meta laden fehlgeschlagen', error);
     }
   }
 

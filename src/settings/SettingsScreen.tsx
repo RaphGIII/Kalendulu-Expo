@@ -41,11 +41,8 @@ import { useAppTheme } from "@/src/theme/ThemeProvider";
 import { ThemeColors } from "@/src/theme/themes";
 import { LEGAL_LINKS } from "@/src/config/legalLinks";
 import { requestOnboardingReplay } from "@/src/onboarding/onboardingStorage";
-import {
-  openSubscriptionManagement,
-  premiumProductIds,
-  useSubscription,
-} from "@/src/billing";
+import { openSubscriptionManagement, premiumProductIds } from "@/src/billing/subscriptionService";
+import { useSubscription } from "@/src/billing/useSubscription";
 
 const PROFILE_IMAGE_STORAGE_KEY = "kalendulu:profile-image-uri:v1";
 

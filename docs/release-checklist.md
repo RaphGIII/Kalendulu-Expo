@@ -25,6 +25,8 @@ Before TestFlight or App Store submission:
 
 ```bash
 npm run validate:publish
+npm run audit:release
+npm run audit:release:strict-env
 ```
 
 10. Build and submit:

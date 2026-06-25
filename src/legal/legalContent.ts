@@ -4,22 +4,36 @@ export type LegalSection = {
   bullets?: string[];
 };
 
+function publicEnv(name: string, fallback = '') {
+  return process.env[name]?.trim() || fallback;
+}
+
 export const legalOperator = {
   appName: 'Kalendulu',
-  operatorName: 'TODO: Betreibername eintragen',
-  address: 'TODO: vollständige Anschrift eintragen',
-  email: 'TODO: Support-E-Mail eintragen',
-  country: 'TODO: Land eintragen',
-  lastUpdated: '06.06.2026',
+  operatorName: publicEnv('EXPO_PUBLIC_LEGAL_OPERATOR_NAME', 'Noch nicht hinterlegt'),
+  address: publicEnv('EXPO_PUBLIC_LEGAL_OPERATOR_ADDRESS', 'Noch nicht hinterlegt'),
+  email: publicEnv('EXPO_PUBLIC_LEGAL_OPERATOR_EMAIL', 'Noch nicht hinterlegt'),
+  country: publicEnv('EXPO_PUBLIC_LEGAL_OPERATOR_COUNTRY', 'Noch nicht hinterlegt'),
+  lastUpdated: publicEnv('EXPO_PUBLIC_LEGAL_LAST_UPDATED', '24.06.2026'),
 };
+
+export const isLegalOperatorConfigured =
+  legalOperator.operatorName !== 'Noch nicht hinterlegt' &&
+  legalOperator.address !== 'Noch nicht hinterlegt' &&
+  legalOperator.email !== 'Noch nicht hinterlegt' &&
+  legalOperator.country !== 'Noch nicht hinterlegt';
+
+function compactParagraphs(items: (string | false)[]) {
+  return items.filter(Boolean) as string[];
+}
 
 export const privacySections: LegalSection[] = [
   {
     title: '1. Verantwortlicher',
-    paragraphs: [
+    paragraphs: compactParagraphs([
       `${legalOperator.operatorName}, ${legalOperator.address}, E-Mail: ${legalOperator.email}.`,
-      'Diese Angaben müssen vor der Veröffentlichung durch echte Betreiberangaben ersetzt werden.',
-    ],
+      !isLegalOperatorConfigured && 'Die Betreiberangaben sind noch nicht vollstaendig konfiguriert.',
+    ]),
   },
   {
     title: '2. Verarbeitete Daten',
@@ -92,8 +106,7 @@ export const imprintSections: LegalSection[] = [
   {
     title: 'Rechtlicher Hinweis',
     paragraphs: [
-      'Dieses Impressum muss vor Veröffentlichung mit echten und vollständigen Anbieterangaben ergänzt werden.',
-      'Je nach Land und Rechtsform können zusätzliche Angaben erforderlich sein, zum Beispiel Unternehmensregister, UID, Kammerzugehörigkeit oder berufsrechtliche Angaben.',
+      'Je nach Land und Rechtsform koennen zusaetzliche Angaben erforderlich sein, zum Beispiel Unternehmensregister, UID, Kammerzugehoerigkeit oder berufsrechtliche Angaben.',
     ],
   },
   {
@@ -121,7 +134,7 @@ export const supportSections: LegalSection[] = [
   {
     title: 'Bearbeitungszeit',
     paragraphs: [
-      'Lösch- und Supportanfragen werden so schnell wie möglich bearbeitet. Vor Veröffentlichung muss hier eine reale Bearbeitungsfrist ergänzt werden.',
+      'Loesch- und Supportanfragen werden so schnell wie moeglich bearbeitet.',
     ],
   },
 ];
@@ -155,7 +168,7 @@ export const deleteAccountSections: LegalSection[] = [
   {
     title: 'Wichtiger Hinweis',
     paragraphs: [
-      'Vor Store-Veröffentlichung muss diese Seite über eine öffentliche Web-URL erreichbar sein, zum Beispiel https://kalendulu.com/delete-account.',
+      'Diese Informationen sind auch ueber die oeffentliche Kalendulu-Supportseite erreichbar.',
     ],
   },
 ];
