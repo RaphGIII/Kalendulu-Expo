@@ -1,40 +1,77 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+
+const bars = [0.42, 0.64, 0.48, 0.78, 0.58, 0.86, 0.68, 0.9, 0.74, 0.82];
 
 export default function MiniGraph() {
-  const w = 220;
-  const h = 80;
-
-  const path = useMemo(() => {
-    // eine ruhige “hand-drawn” Kurve, ähnlich Referenz
-    return [
-      `M 10 ${h * 0.62}`,
-      `C 45 ${h * 0.38}, 70 ${h * 0.80}, 95 ${h * 0.58}`,
-      `C 120 ${h * 0.36}, 145 ${h * 0.75}, 170 ${h * 0.52}`,
-      `C 190 ${h * 0.40}, 205 ${h * 0.56}, 210 ${h * 0.44}`,
-    ].join(' ');
-  }, [h]);
-
   return (
     <View style={styles.wrap}>
-      {/* Glow */}
-      <Svg width={w} height={h} style={StyleSheet.absoluteFill}>
-        <Path d={path} stroke="rgba(255,79,216,0.35)" strokeWidth={10} fill="none" />
-      </Svg>
-
-      {/* Line */}
-      <Svg width={w} height={h}>
-        <Path d={path} stroke="#FF4FD8" strokeWidth={3.5} fill="none" />
-      </Svg>
+      <View style={styles.baseline} />
+      <View style={styles.row}>
+        {bars.map((value, index) => (
+          <View key={index} style={styles.barSlot}>
+            <View
+              style={[
+                styles.barGlow,
+                {
+                  height: `${Math.round(value * 100)}%`,
+                },
+              ]}
+            />
+            <View
+              style={[
+                styles.bar,
+                {
+                  height: `${Math.round(value * 100)}%`,
+                },
+              ]}
+            />
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: {
+    height: 82,
     marginTop: 14,
     borderRadius: 18,
     overflow: 'hidden',
+    justifyContent: 'flex-end',
+  },
+  baseline: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 14,
+    height: 1,
+    backgroundColor: 'rgba(255,79,216,0.2)',
+  },
+  row: {
+    height: 70,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 7,
+    paddingHorizontal: 8,
+    paddingBottom: 10,
+  },
+  barSlot: {
+    flex: 1,
+    height: '100%',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+  },
+  barGlow: {
+    position: 'absolute',
+    width: 12,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,79,216,0.18)',
+  },
+  bar: {
+    width: 5,
+    borderRadius: 999,
+    backgroundColor: '#FF4FD8',
   },
 });

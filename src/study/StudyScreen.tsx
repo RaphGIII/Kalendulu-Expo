@@ -10,8 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import * as DocumentPicker from 'expo-document-picker';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import type { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import dayjs from 'dayjs';
 import 'dayjs/locale/de';
 import { router } from 'expo-router';
@@ -103,6 +102,7 @@ function logStudyClientStep(stage: string, details?: Record<string, unknown>) {
 }
 
 const SHOW_STUDY_DEBUG_STATUS = false;
+type DateTimePickerComponent = React.ComponentType<any>;
 
 
 function minutesLabel(minutes: number) {
@@ -378,6 +378,8 @@ export default function StudyScreen() {
   const [preview, setPreview] = useState<StudyBuildResult | null>(null);
   const [, setProcessingReport] = useState<StudyProcessingReport | null>(null);
   const [showExamPicker, setShowExamPicker] = useState(false);
+  const [DateTimePickerComponent, setDateTimePickerComponent] =
+    useState<DateTimePickerComponent | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const analysisProgressRef = useRef(0);
@@ -476,6 +478,30 @@ export default function StudyScreen() {
     setExamDate(dayjs(selectedDate).format('YYYY-MM-DD'));
   }
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!showExamPicker || DateTimePickerComponent) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void import('@react-native-community/datetimepicker')
+      .then((module) => {
+        if (!cancelled) {
+          setDateTimePickerComponent(() => module.default as DateTimePickerComponent);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setShowExamPicker(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [DateTimePickerComponent, showExamPicker]);
+
   async function advanceAnalysisProgress(target: number) {
     const start = analysisProgressRef.current;
     const end = Math.max(start, Math.min(100, target));
@@ -489,6 +515,7 @@ export default function StudyScreen() {
   }
 
   async function addFile() {
+    const DocumentPicker = await import('expo-document-picker');
     const result = await DocumentPicker.getDocumentAsync({
       type: [
         'text/plain',
@@ -1365,8 +1392,8 @@ export default function StudyScreen() {
                 {examDate ? dayjs(examDate).format('DD.MM.YYYY') : 'Datum auswählen'}
               </Text>
             </Pressable>
-            {showExamPicker ? (
-              <DateTimePicker
+            {showExamPicker && DateTimePickerComponent ? (
+              <DateTimePickerComponent
                 value={examDate ? new Date(`${examDate}T12:00:00`) : new Date()}
                 mode="date"
                 display="spinner"

@@ -13,7 +13,10 @@
     },
     "production": {
       "autoIncrement": true,
-      "environment": "production"
+      "environment": "production",
+      "env": {
+        "RCT_NEW_ARCH_ENABLED": "0"
+      }
     }
   },
   "submit": {

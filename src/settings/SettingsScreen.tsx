@@ -1,6 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
@@ -18,14 +17,6 @@ import {
 } from "react-native";
 
 import { useAuth } from "@/src/auth/AuthProvider";
-import {
-  clearCalendarStorage,
-  exportCalendarAsICS,
-  exportCalendarAsJSON,
-  getCalendarStorageStats,
-  importCalendarFromICS,
-  importCalendarFromJSON,
-} from "@/src/calendar/calendarImportExport";
 import { supabase } from "@/src/lib/supabase";
 import { deleteCurrentAccount } from "@/src/services/accountDeletion";
 import {
@@ -45,6 +36,10 @@ import { openSubscriptionManagement, premiumProductIds } from "@/src/billing/sub
 import { useSubscription } from "@/src/billing/useSubscription";
 
 const PROFILE_IMAGE_STORAGE_KEY = "kalendulu:profile-image-uri:v1";
+
+async function loadCalendarImportExport() {
+  return import("@/src/calendar/calendarImportExport");
+}
 
 const editableColorKeys: (keyof ThemeColors)[] = [
   "background",
@@ -421,6 +416,7 @@ export default function SettingsScreen() {
 
   async function refreshStorageStats() {
     try {
+      const { getCalendarStorageStats } = await loadCalendarImportExport();
       const stats = await getCalendarStorageStats();
       setStorageStats(stats);
     } catch {
@@ -493,6 +489,7 @@ export default function SettingsScreen() {
 
   async function pickProfileImage() {
     try {
+      const ImagePicker = await import("expo-image-picker");
       const permission =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
 
@@ -594,8 +591,8 @@ export default function SettingsScreen() {
             try {
               const result =
                 type === "json"
-                  ? await importCalendarFromJSON("append")
-                  : await importCalendarFromICS("append");
+                  ? await (await loadCalendarImportExport()).importCalendarFromJSON("append")
+                  : await (await loadCalendarImportExport()).importCalendarFromICS("append");
 
               await refreshStorageStats();
 
@@ -618,8 +615,8 @@ export default function SettingsScreen() {
             try {
               const result =
                 type === "json"
-                  ? await importCalendarFromJSON("replace")
-                  : await importCalendarFromICS("replace");
+                  ? await (await loadCalendarImportExport()).importCalendarFromJSON("replace")
+                  : await (await loadCalendarImportExport()).importCalendarFromICS("replace");
 
               await refreshStorageStats();
 
@@ -646,7 +643,7 @@ export default function SettingsScreen() {
         text: "JSON",
         onPress: async () => {
           try {
-            await exportCalendarAsJSON();
+            await (await loadCalendarImportExport()).exportCalendarAsJSON();
           } catch {
             Alert.alert("Fehler", "JSON-Export konnte nicht erstellt werden.");
           }
@@ -656,7 +653,7 @@ export default function SettingsScreen() {
         text: "ICS",
         onPress: async () => {
           try {
-            await exportCalendarAsICS();
+            await (await loadCalendarImportExport()).exportCalendarAsICS();
           } catch {
             Alert.alert("Fehler", "ICS-Export konnte nicht erstellt werden.");
           }
@@ -676,7 +673,7 @@ export default function SettingsScreen() {
           style: "destructive",
           onPress: async () => {
             try {
-              await clearCalendarStorage();
+              await (await loadCalendarImportExport()).clearCalendarStorage();
               await refreshStorageStats();
               Alert.alert("Erledigt", "Alle Kalenderdaten wurden geloescht.");
             } catch {

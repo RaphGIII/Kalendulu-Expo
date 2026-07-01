@@ -1,15 +1,24 @@
-import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import dayjs from 'dayjs';
 
 import { loadAppSettings, type NotificationLeadTime } from '../settings/appSettings';
 
 let notificationHandlerConfigured = false;
+let notificationsModule: typeof import('expo-notifications') | null = null;
 
-function ensureNotificationHandler() {
+async function getNotifications() {
+  if (!notificationsModule) {
+    notificationsModule = await import('expo-notifications');
+    if (__DEV__) console.log('[notifications] loaded');
+  }
+  return notificationsModule;
+}
+
+async function ensureNotificationHandler() {
   if (notificationHandlerConfigured) return;
 
   try {
+    const Notifications = await getNotifications();
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
         shouldShowBanner: true,
@@ -19,14 +28,14 @@ function ensureNotificationHandler() {
       }),
     });
     notificationHandlerConfigured = true;
-    if (__DEV__) console.log('[notifications] loaded');
   } catch {
     notificationHandlerConfigured = false;
   }
 }
 
 export async function ensureNotificationPermission() {
-  ensureNotificationHandler();
+  await ensureNotificationHandler();
+  const Notifications = await getNotifications();
   const settings = await Notifications.getPermissionsAsync();
   if (settings.status === 'granted') return true;
 
@@ -35,7 +44,8 @@ export async function ensureNotificationPermission() {
 }
 
 export async function scheduleTaskReminder(taskTitle: string) {
-  ensureNotificationHandler();
+  await ensureNotificationHandler();
+  const Notifications = await getNotifications();
   const appSettings = await loadAppSettings();
   if (!appSettings.notifications.todosEnabled || appSettings.notifications.todoMode === 'off') {
     return null;
@@ -82,7 +92,8 @@ function leadTimeToMinutes(leadTime: NotificationLeadTime) {
 }
 
 export async function scheduleEventReminder(eventTitle: string, start: Date) {
-  ensureNotificationHandler();
+  await ensureNotificationHandler();
+  const Notifications = await getNotifications();
   const appSettings = await loadAppSettings();
   if (!appSettings.notifications.eventsEnabled) return null;
 
@@ -113,6 +124,7 @@ export async function scheduleEventReminder(eventTitle: string, start: Date) {
 export async function cancelReminder(notificationId?: string | null) {
   if (!notificationId) return;
   try {
+    const Notifications = await getNotifications();
     await Notifications.cancelScheduledNotificationAsync(notificationId);
   } catch {
     // ignore
@@ -122,7 +134,8 @@ export async function cancelReminder(notificationId?: string | null) {
 export async function configureAndroidChannel() {
   if (Platform.OS !== 'android') return;
 
-  ensureNotificationHandler();
+  await ensureNotificationHandler();
+  const Notifications = await getNotifications();
   await Notifications.setNotificationChannelAsync('default', {
     name: 'default',
     importance: Notifications.AndroidImportance.MAX,

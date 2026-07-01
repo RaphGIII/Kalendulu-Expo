@@ -7,7 +7,7 @@
     "icon": "./assets/images/icon.png",
     "scheme": "kalendulu",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/images/icon.png",
@@ -47,7 +47,6 @@
           }
         }
       ],
-      "@react-native-community/datetimepicker",
       "expo-web-browser"
     ],
     "experiments": {

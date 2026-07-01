@@ -104,8 +104,8 @@ function assertNoPath(relativePath, reason) {
 
 scanFiles({
   pathsToScan: ['app', 'src', 'components', 'hooks', 'constants', 'app.json', 'package.json'],
-  pattern: /react-native-google-mobile-ads|AdMob|admob|RewardedAd|InterstitialAd|BannerAd/g,
-  label: 'Google Mobile Ads residue',
+  pattern: /react-native-google-mobile-ads|AdMob|admob|RewardedAd|InterstitialAd|BannerAd|react-native-reanimated|react-native-worklets/g,
+  label: 'Forbidden native dependency residue',
 });
 
 scanFiles({

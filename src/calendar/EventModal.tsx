@@ -9,7 +9,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import dayjs from 'dayjs';
 
 import { CalEvent } from './types';
@@ -28,6 +27,7 @@ type Props = {
 };
 
 type PickerKind = 'date' | 'start' | 'end' | null;
+type DateTimePickerComponent = React.ComponentType<any>;
 
 function uid() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -84,6 +84,8 @@ export default function EventModal({
   const [endTime, setEndTime] = useState<Date>(defaultEnd);
 
   const [pickerKind, setPickerKind] = useState<PickerKind>(null);
+  const [DateTimePickerComponent, setDateTimePickerComponent] =
+    useState<DateTimePickerComponent | null>(null);
 
   useEffect(() => {
     if (!visible) return;
@@ -162,6 +164,30 @@ const event: CalEvent = {
       setPickerKind(null);
     }
   }
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!pickerKind || DateTimePickerComponent) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void import('@react-native-community/datetimepicker')
+      .then((module) => {
+        if (!cancelled) {
+          setDateTimePickerComponent(() => module.default as DateTimePickerComponent);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPickerKind(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [DateTimePickerComponent, pickerKind]);
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -243,9 +269,9 @@ const event: CalEvent = {
             })}
           </View>
 
-          {pickerKind ? (
+          {pickerKind && DateTimePickerComponent ? (
             <View style={styles.pickerWrap}>
-              <DateTimePicker
+              <DateTimePickerComponent
                 value={
                   pickerKind === 'date'
                     ? dateValue
